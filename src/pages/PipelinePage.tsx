@@ -14,7 +14,7 @@ import {
   STAGE_CONFIG, mockPipelineDeals, mockRoutingRules, mockLeadQueue,
   type DealStage, type PipelineDeal,
 } from "@/lib/pipelineData";
-import { scopedAgents } from "@/lib/dataScope";
+import { useAgents } from "@/hooks/useBook";
 import { format, formatDistanceToNow } from "date-fns";
 import { cn } from "@/lib/utils";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -207,7 +207,7 @@ function RoutingTab() {
 
 function QueueTab() {
   const { user } = useRole();
-  const agentList = scopedAgents(user);
+  const agentList = useAgents();
   const [assignments, setAssignments] = useState<Record<string, string>>({});
 
   const handleAssign = (leadId: string, agentName: string) => {

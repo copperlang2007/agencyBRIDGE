@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ApiError } from "@/lib/api";
 import {
   ShieldCheck, ShieldAlert, FileCheck2, Lock, Download, Search,
   Activity, Database, KeyRound, Eye, AlertTriangle, CheckCircle2,
   Server, GitBranch, Network, Bug, FileText, Users, Clock,
-  Radio, Pause, Play, MessageSquare, ChevronRight, Copy,
+  Radio, Pause, Play, MessageSquare, ChevronRight, Copy, ShieldQuestion,
 } from "lucide-react";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,7 +16,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
-  getAuditLog, verifyAuditIntegrity, exportAuditCSV, clearAuditLog,
+  fetchAuditLog, fetchAuditIntegrity, exportAuditCSV,
   type AuditIntegrityResult,
   subscribeAuditLog,
   type AuditEntry, type AuditSeverity, type AuditCategory,
@@ -323,7 +324,12 @@ export default function SecurityPage() {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [severityFilter, setSeverityFilter] = useState<string>("all");
-  const [integrity, setIntegrity] = useState<AuditIntegrityResult>({ valid: true, brokenAt: null, truncated: false });
+  // Null until the server has answered. It must not start as "valid": a failed
+  // load would then leave the page asserting a verified chain on the strength
+  // of an initial value, which is the exact failure this whole feature exists
+  // to prevent.
+  const [integrity, setIntegrity] = useState<AuditIntegrityResult | null>(null);
+  const [logError, setLogError] = useState<string | null>(null);
 
   // ── Live event stream state ──────────────────────────────────────
   const [liveStream, setLiveStream] = useState<AuditEntry[]>([]);
@@ -331,28 +337,47 @@ export default function SecurityPage() {
   const streamRef = useRef<HTMLDivElement>(null);
   const maxStreamItems = 50;
 
-  useEffect(() => {
-    logAudit({ actor: user?.name ?? "unknown", actorId: user?.id ?? "unknown", action: "viewed_security_dashboard", category: "security", entity: "Security Page", severity: "info" });
-    setLog(getAuditLog());
-    setIntegrity(verifyAuditIntegrity());
+  // Reads the trail and the server's verdict on it. Both come from the API:
+  // the chain lives in Postgres and is verified there, so a browser that felt
+  // like reporting "Verified" cannot.
+  const reload = useCallback(async () => {
+    try {
+      const [entries, result] = await Promise.all([fetchAuditLog(500), fetchAuditIntegrity()]);
+      setLog(entries);
+      setIntegrity(result);
+      setLogError(null);
+    } catch (err) {
+      // The verdict is cleared, not merely accompanied by an error. Leaving the
+      // previous "Verified" in place would state that the chain is intact on the
+      // strength of a check that has since failed — stale, and indistinguishable
+      // on screen from a live confirmation. Not knowing is its own answer and
+      // has to be shown as one.
+      setIntegrity(null);
+      setLogError(err instanceof ApiError ? err.message : "Could not load the audit trail.");
+    }
   }, []);
 
-  // Subscribe to real-time audit events (same-tab + cross-tab via BroadcastChannel)
   useEffect(() => {
-    const unsub = subscribeAuditLog((entry) => {
-      setLog((prev) => {
-        // Avoid duplicates from cross-tab broadcast + storage sync
-        if (prev.some((e) => e.id === entry.id)) return prev;
-        return [...prev, entry];
-      });
-      setLiveStream((prev) => {
-        if (prev.some((e) => e.id === entry.id)) return prev;
-        if (streamPausedRef.current) return prev;
-        return [...prev, entry].slice(-maxStreamItems);
-      });
+    logAudit({ action: "viewed_security_dashboard", category: "security", entity: "Security Page", severity: "info" });
+    void reload();
+  }, [reload]);
+
+  // Subscribe to real-time audit events (same-tab + cross-tab via BroadcastChannel)
+  // The transport notifies after a batch reaches the server. Refetch rather
+  // than splicing a local copy in: the entry that matters is the one the server
+  // stored and hashed, not the one this tab hoped it sent.
+  useEffect(() => {
+    return subscribeAuditLog(() => {
+      if (streamPausedRef.current) return;
+      void reload();
     });
-    return unsub;
-  }, []);
+  }, [reload]);
+
+  // Newest entries feed the live panel.
+  useEffect(() => {
+    if (streamPaused) return;
+    setLiveStream(log.slice(0, maxStreamItems).slice().reverse());
+  }, [log, streamPaused]);
 
   // Keep a ref of pause state so the subscription closure always reads current value
   // without needing to re-subscribe on every toggle
@@ -588,7 +613,7 @@ export default function SecurityPage() {
 
   const handleExport = () => {
     logAudit({ actor: "admin", actorId: "admin-001", action: "exported_audit_log", category: "security", entity: "Audit Log", severity: "warning", details: "CSV export of full audit trail" });
-    const csv = exportAuditCSV();
+    const csv = exportAuditCSV(log);
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -596,32 +621,32 @@ export default function SecurityPage() {
     a.download = `audit-log-${new Date().toISOString().split("T")[0]}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    setLog(getAuditLog());
   };
 
-  const handleVerify = () => {
-    const result = verifyAuditIntegrity();
-    setIntegrity(result);
-    logAudit({
-      actor: "admin", actorId: "admin-001",
-      action: result.valid ? "audit_integrity_verified" : "audit_integrity_broken",
-      category: "security", entity: "Audit Log",
-      severity: result.valid ? "success" : "critical",
-      details: result.valid ? "Hash chain verified — no tampering detected" : `Tampering detected at entry ${result.brokenAt}`,
-    });
-    setLog(getAuditLog());
+  const handleVerify = async () => {
+    try {
+      const result = await fetchAuditIntegrity();
+      setIntegrity(result);
+      logAudit({
+        action: result.valid ? "audit_integrity_verified" : "audit_integrity_broken",
+        category: "security", entity: "Audit Log",
+        severity: result.valid ? "success" : "critical",
+        details: result.valid
+          ? `Hash chain verified across ${result.count} entries`
+          : `Tampering detected at entry ${result.brokenAt}: ${result.reason ?? "chain broken"}`,
+      });
+      await reload();
+    } catch (err) {
+      setIntegrity(null);
+      setLogError(err instanceof ApiError ? err.message : "Verification failed.");
+    }
   };
 
-  const handleClear = () => {
-    // clearAuditLog re-seeds the emptied chain with a genesis entry recording who
-    // cleared it, so the erasure stays auditable — read the log back rather than
-    // assuming it is empty.
-    const result = clearAuditLog(role ?? undefined, user?.name ?? "unknown", user?.id ?? "unknown");
-    if (!result.success) return;
-    setLog(getAuditLog());
-    setLiveStream([]);
-    setIntegrity(verifyAuditIntegrity());
-  };
+  // There is deliberately no "clear log" action any more. The trail is
+  // append-only on the server, and an operator who can erase their own audit
+  // history does not have one. The old button called into localStorage, which
+  // is exactly the property that made the previous implementation unusable as
+  // evidence.
 
   // ── Remediation: mark control as resolved ──────────────────────────
   const [resolvedActions, setResolvedActions] = useState<Set<string>>(new Set());
@@ -705,18 +730,26 @@ export default function SecurityPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Chain Integrity</p>
-                <p className={`text-2xl font-display font-bold mt-1 ${integrity.valid ? "text-success" : "text-destructive"}`}>
-                  {integrity.valid ? "Verified" : "Broken"}
+                <p className={`text-2xl font-display font-bold mt-1 ${
+                  integrity === null ? "text-muted-foreground" : integrity.valid ? "text-success" : "text-destructive"
+                }`}>
+                  {integrity === null ? (logError ? "Unavailable" : "Checking…") : integrity.valid ? "Verified" : "Broken"}
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {!integrity.valid
-                    ? `Broken at #${integrity.brokenAt}`
-                    : integrity.truncated
-                      ? "No tampering detected in retained window"
-                      : "No tampering detected"}
+                  {integrity === null
+                    ? logError ?? "Asking the server to re-derive the chain"
+                    : !integrity.valid
+                      ? integrity.reason ?? `Broken at #${integrity.brokenAt}`
+                      : integrity.truncated
+                        ? "No tampering detected in retained window"
+                        : `No tampering detected across ${integrity.count} entries`}
                 </p>
               </div>
-              {integrity.valid ? <Lock className="h-10 w-10 text-success/30" /> : <ShieldAlert className="h-10 w-10 text-destructive/30" />}
+              {integrity === null
+                ? <ShieldQuestion className="h-10 w-10 text-muted-foreground/30" />
+                : integrity.valid
+                  ? <Lock className="h-10 w-10 text-success/30" />
+                  : <ShieldAlert className="h-10 w-10 text-destructive/30" />}
             </div>
           </CardContent>
         </Card>
@@ -1374,9 +1407,9 @@ export default function SecurityPage() {
               <Button size="sm" variant="outline" onClick={handleExport}>
                 <Download className="h-4 w-4 mr-1.5" /> Export CSV
               </Button>
-              <Button size="sm" variant="destructive" onClick={handleClear}>
-                Clear Log
-              </Button>
+              <span className="text-xs text-muted-foreground flex items-center gap-1.5">
+                <Lock className="h-3.5 w-3.5" /> Append-only
+              </span>
             </div>
           </div>
         </CardHeader>
@@ -1476,20 +1509,30 @@ export default function SecurityPage() {
           </div>
 
           {/* Integrity banner */}
-          {!integrity.valid && (
-            <div className="mt-3 flex items-center gap-2 rounded-lg bg-destructive/10 border border-destructive/30 px-4 py-3">
-              <ShieldAlert className="h-5 w-5 text-destructive shrink-0" />
-              <p className="text-sm text-destructive font-medium">
-                Audit chain integrity broken at entry #{integrity.brokenAt}. Possible tampering detected. Investigate immediately.
+          {integrity === null && logError && (
+            <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+              <ShieldQuestion className="h-4 w-4 mt-0.5 shrink-0 text-amber-600" />
+              <p className="text-sm text-amber-800 dark:text-amber-300">
+                The audit trail could not be loaded, so its integrity is unknown — this is not a
+                statement that the chain is intact, and any entries listed below may be out of
+                date. {logError}
               </p>
             </div>
           )}
-          {integrity.valid && stats.total > 0 && (
+          {integrity !== null && !integrity.valid && (
+            <div className="mt-3 flex items-center gap-2 rounded-lg bg-destructive/10 border border-destructive/30 px-4 py-3">
+              <ShieldAlert className="h-5 w-5 text-destructive shrink-0" />
+              <p className="text-sm text-destructive font-medium">
+                Audit chain integrity broken at entry #{integrity.brokenAt}. {integrity.reason} Possible tampering detected. Investigate immediately.
+              </p>
+            </div>
+          )}
+          {integrity !== null && integrity.valid && stats.total > 0 && (
             <div className="mt-3 flex items-center gap-2 rounded-lg bg-success/10 border border-success/30 px-4 py-3">
               <CheckCircle2 className="h-5 w-5 text-success shrink-0" />
               <p className="text-sm text-success font-medium">
-                Hash chain integrity verified — all {stats.total} entries are tamper-free.
-                {integrity.truncated && " Older entries have aged out of the local retention window and are outside this check."}
+                Hash chain integrity verified by the server — all {integrity.count} entries re-derived and matching.
+                {integrity.truncated && " Entries are missing from the front of the chain and are outside this check."}
               </p>
             </div>
           )}

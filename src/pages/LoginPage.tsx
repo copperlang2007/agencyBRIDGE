@@ -4,17 +4,40 @@ import { Card, CardContent, CardHeader, CardDescription } from "@/components/ui/
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ShieldCheck, Lock, Mail, Loader2, AlertCircle, Eye, EyeOff } from "lucide-react";
+import { ShieldCheck, Lock, Mail, Loader2, AlertCircle, Eye, EyeOff, PlayCircle } from "lucide-react";
 import { BrandMark } from "@/components/shared/BrandMark";
+import { Checkbox } from "@/components/ui/checkbox";
+import { roleLabels, type RoleId } from "@/lib/permissions";
+
+/** Roles the demo can be explored as, in the order they make sense to a visitor. */
+const DEMO_ROLES: RoleId[] = ["admin", "supervisor", "agent", "retention", "readonly"];
 
 export default function LoginPage() {
-  const { login } = useRole();
+  const { login, enterDemo } = useRole();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+
+  // The demo gate. Entering is a deliberate act with an acknowledgement, not
+  // the state the app falls into when nobody signs in — the server refuses the
+  // request without it, so this checkbox is the gate rather than a label about
+  // one.
+  const [demoRole, setDemoRole] = useState<RoleId>("admin");
+  const [acknowledged, setAcknowledged] = useState(false);
+  const [demoLoading, setDemoLoading] = useState(false);
+
+  const handleDemo = async () => {
+    setError(null);
+    setDemoLoading(true);
+    const result = await enterDemo(demoRole);
+    if (!result.success) {
+      setError(result.error || "Could not open the demo.");
+      setDemoLoading(false);
+    }
+  };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -122,7 +145,7 @@ export default function LoginPage() {
               <Button
                 type="submit"
                 className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-semibold shadow-lg shadow-blue-500/20"
-                disabled={loading || !email || !password}
+                disabled={loading || demoLoading || !email || !password}
               >
                 {loading ? (
                   <>
@@ -140,6 +163,71 @@ export default function LoginPage() {
               <p className="text-xs text-muted-foreground text-center leading-relaxed">
                 Credentials are managed by your agency administrator. All login attempts are audit-logged and monitored.
               </p>
+            </div>
+
+            {/* ── Demo gate ────────────────────────────────────────────── */}
+            <div className="mt-6 pt-5 border-t border-border/60">
+              <div className="flex items-baseline justify-between gap-3 mb-3">
+                <h3 className="text-sm font-semibold text-foreground">Explore the demo</h3>
+                <span className="text-[11px] font-medium uppercase tracking-wide text-amber-700 bg-amber-100 rounded px-1.5 py-0.5">
+                  Read-only
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed mb-3">
+                A sample agency with invented clients, policies and commissions. No real
+                beneficiary data, and nothing you do here changes it.
+              </p>
+
+              <Label htmlFor="demo-role" className="text-xs font-medium text-foreground">
+                Sign in as
+              </Label>
+              <select
+                id="demo-role"
+                value={demoRole}
+                onChange={(e) => setDemoRole(e.target.value as RoleId)}
+                className="mt-1 w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+              >
+                {DEMO_ROLES.map((r) => (
+                  <option key={r} value={r}>
+                    {roleLabels[r]}
+                  </option>
+                ))}
+              </select>
+
+              <label className="flex items-start gap-2 mt-3 cursor-pointer">
+                <Checkbox
+                  id="demo-ack"
+                  checked={acknowledged}
+                  onCheckedChange={(v) => setAcknowledged(v === true)}
+                  className="mt-0.5"
+                />
+                <span className="text-xs text-muted-foreground leading-relaxed">
+                  I understand this is sample data, not a live agency, and that changes are disabled.
+                </span>
+              </label>
+
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full mt-3"
+                // Also disabled while a credential sign-in is in flight: two
+                // concurrent requests both set the same session state, and
+                // whichever answered last would decide who you are signed in as.
+                disabled={!acknowledged || demoLoading || loading}
+                onClick={handleDemo}
+              >
+                {demoLoading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Opening demo...
+                  </>
+                ) : (
+                  <>
+                    <PlayCircle className="h-4 w-4 mr-2" />
+                    Enter demo as {roleLabels[demoRole]}
+                  </>
+                )}
+              </Button>
             </div>
           </CardContent>
         </Card>

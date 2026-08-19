@@ -57,3 +57,34 @@ Immutable IDs. Never silently rewrite a decision; supersede it with a new one.
 **Decision:** The audit store moves from a bare entry array under `medicare_audit_log_v2` to a single object under `medicare_audit_log_v3`: `{ head, entries }`.
 **Rationale:** The retained-head boundary and the entries it describes must never disagree. Held in a sibling key they were two non-atomic `setItem` calls — a failed second write or an interleaving tab left the boundary describing a head the log no longer had, and verification reported good entries as tampered. One key and one write removes the window entirely.
 **Consequence:** v2 logs in an existing browser profile are not migrated, for the same reason as D-004 — a different stored shape would fail verification and raise a false alarm. Acceptable while the log is demo-local; revisit with R-003.
+
+## D-010
+**Status:** accepted — resolves D-006
+**Decision:** Both paths. A real backend verifies credentials and holds the book of business, **and** the public deployment runs an explicitly gated, read-only demo tenant.
+**Rationale:** The owner chose both when D-006 was put to them. They are not alternatives once a server exists: the backend makes the security claims true, and the demo makes the public URL honest about what a visitor is looking at. Neither alone does both jobs — a backend with the sample book still open would present invented clients as a live agency, and a gated demo without a backend would still be a browser deciding its own permissions.
+**Consequence:** R-001 closes. R-002 closes. R-010 closes (the chain no longer lives in `localStorage`).
+
+## D-011
+**Status:** accepted
+**Decision:** Vercel Serverless Functions under `api/`, with Neon Postgres, rather than migrating the app to Next.js + tRPC as the house stack prescribes.
+**Rationale:** The house default applies "unless the repo overrides"; this repo is a shipped Vite SPA with its own router, CI, bundle budget and deployed identity. A framework migration would rewrite every route and invalidate the code-splitting and rewrite work already verified — for no security benefit, because the boundary that was missing is a server, not a framework. Functions in the same deployment give a real origin-side boundary with no change to how the app is built or served.
+**Confidence:** High.
+**Revisit trigger:** Server-rendered pages, streaming, or a shared server/client type layer become requirements.
+
+## D-012
+**Status:** accepted
+**Decision:** Passwords are hashed with scrypt from the Node standard library at OWASP's recommended cost (N=2^17, r=8, p=1), not argon2 or bcrypt.
+**Rationale:** Both alternatives are native addons. A serverless bundle that must compile or ship platform binaries fails on the first cold start on a runtime nobody tested, and the failure mode is "nobody can sign in". scrypt is memory-hard, in the standard library, and needs no build step. Measured at ~470ms on the deploy target, which is the intended cost.
+**Consequence:** Cost parameters are stored in each hash and read back at verification, so the cost can be raised later without locking out existing accounts.
+
+## D-013
+**Status:** accepted
+**Decision:** The audit chain moves from `localStorage` to Postgres, appended and verified by the API. `src/lib/auditLog.ts` becomes a transport; there is no client-side chain.
+**Rationale:** A chain the audited party writes, stores and verifies is not evidence. The browser could rewrite entries, discard the log, or simply report "Verified" — and the Security page presented that self-assessment to the operator as a compliance control. Hashing on the server, in a table the client cannot reach, is what makes the verdict mean anything.
+**Consequence:** `logAudit()` keeps its synchronous fire-and-forget signature, so its ~24 call sites are unchanged; entries are buffered in an outbox and posted in batches. `clearAuditLog()` is removed — an append-only trail has no clear operation, and an operator who can erase their own audit history does not have one. Actor, session and IP are taken from the session and ignored if supplied by the client. Materially advances R-003; does not close it, because the copy still claims more than the system does.
+
+## D-014
+**Status:** accepted
+**Decision:** Role switching and impersonation are server-side. The session row records the impersonated user; every request resolves its effective identity from it.
+**Rationale:** The previous implementation swapped the client's own `user` object. Nothing about the caller's access changed, so an admin "viewing as an agent" still held the whole book — the screen asserted a restriction that was not in force, which is worse than not offering the feature. Permission to impersonate is checked against the caller's **real** role, never the presented one, so stepping down and back up is not an escalation path.
+**Consequence:** The demo's "Switch Role" and an admin's "Impersonate" are one endpoint, because they are one act.

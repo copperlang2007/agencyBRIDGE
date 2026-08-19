@@ -14,6 +14,14 @@ export async function exportCodeAsZip(): Promise<number> {
     // package-lock.json is generated, not source — excluding it keeps ~236 kB of
     // raw text out of the client bundle.
     import.meta.glob(["/*.{ts,js,json,html,css,md}", "!/package-lock.json"], { query: "?raw", import: "default" }) as Record<string, () => Promise<unknown>>,
+    // The serverless API and the database scripts. Without these the export is
+    // a client with nothing to talk to — it would not run, which makes the zip
+    // worse than no zip. db/seed-data.json is excluded on the same grounds as
+    // package-lock.json: 52 kB of generated sample rows, regenerable with
+    // `npm run db:extract`.
+    import.meta.glob("/api/**/*.ts", { query: "?raw", import: "default" }) as Record<string, () => Promise<unknown>>,
+    import.meta.glob("/db/*.{sql,mjs}", { query: "?raw", import: "default" }) as Record<string, () => Promise<unknown>>,
+    import.meta.glob("/scripts/*.mjs", { query: "?raw", import: "default" }) as Record<string, () => Promise<unknown>>,
   ];
 
   let fileCount = 0;
@@ -46,12 +54,26 @@ export async function exportCodeAsZip(): Promise<number> {
       "",
       "```bash",
       "npm install",
-      "npm run dev",
+      "export DATABASE_URL='postgresql://...-pooler.../neondb?sslmode=require'",
+      "npm run db:migrate",
+      // Ahead of the seed, not explained after it: seed-data.json is generated
+      // and is excluded from this zip, and db:seed exits without it.
+      "npm run db:extract   # regenerates db/seed-data.json",
+      "npm run db:seed",
+      "npm run dev:api   # /api functions",
+      "npm run dev       # app on :8080",
       "```",
+      "",
+      "The app needs a Postgres database: authentication, the book of business",
+      "and the audit trail are server-side. See README.md for details.",
+      "",
+      "db/seed-data.json is generated, so it is not in this archive;",
+      "`npm run db:extract` above recreates it from src/lib/mockData.ts.",
       "",
       "## Stack",
       "",
-      "React + Vite + TypeScript + Tailwind CSS + shadcn/ui",
+      "React + Vite + TypeScript + Tailwind CSS + shadcn/ui, with Vercel",
+      "Serverless Functions and Neon Postgres.",
     ].join("\n")
   );
 

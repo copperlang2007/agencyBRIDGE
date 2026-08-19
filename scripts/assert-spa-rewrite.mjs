@@ -29,7 +29,15 @@ const mustMatch = ["/login", "/clients", "/reconciliation", "/agents/agt-1", "/a
 // Nothing under /assets/ may: a missing asset should 404, not return HTML that
 // the browser then rejects on MIME type. Lazy route chunks and non-JS assets are
 // listed explicitly, so a rule narrowed to just the entry bundle fails here.
+// API routes must not fall through either: Vercel serves api/*.ts as functions,
+// and a rewrite that swallowed them would return the HTML shell to every fetch.
+// The app would then fail at runtime with a JSON parse error on "<!doctype", in
+// production only, with a green build behind it.
 const mustNotMatch = [
+  "/api/auth/login",
+  "/api/auth/me",
+  "/api/book/clients",
+  "/api/audit/verify",
   "/assets/index-abc123.js",
   "/assets/Dashboard-9f8e7d.js",        // lazy route chunk
   "/assets/ReconciliationPage-0a1b2c.js",

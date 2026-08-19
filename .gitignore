@@ -5,3 +5,5 @@ dist
 *.log
 .DS_Store
 src/tailwind.config.vibe.json
+.dev-api
+.vercel

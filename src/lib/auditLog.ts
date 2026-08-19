@@ -1,224 +1,236 @@
-// Tamper-evident audit log.
+// Audit logging — client transport.
 //
-// Every meaningful action is appended with actor, action, entity, severity, and
-// session context, chained by SHA-256 so that any later edit to a stored entry is
-// detectable. SecurityPage surfaces the verification result to the operator, so
-// both false alarms and missed tampering are user-visible compliance defects.
+// This module used to hold the chain: it hashed entries in the browser and kept
+// them in localStorage. That made the operator both the subject of the audit and
+// its custodian, which is the one arrangement an audit trail cannot survive —
+// anyone with devtools could rewrite or discard the evidence, and the "verified"
+// badge on the Security page was only ever a statement about a value the same
+// browser had just written.
 //
-// Scope limit (see RISKS R-003): this is browser-local evidence. It detects
-// mutation of retained entries; it cannot prevent an operator with devtools from
-// discarding the log wholesale. Server-side append-only storage is required
-// before this constitutes an audit trail of record.
+// The chain now lives in Postgres, appended by the API, hashed where the client
+// cannot reach it (see api/_lib/audit.ts and src/lib/auditChain.ts). What is
+// left here is delivery: buffer entries, post them, and keep the ones that have
+// not made it across a reload. Nothing in this file decides what an entry says
+// about who did it — the server takes actor, session and IP from the session.
 
-import { sha256Hex } from "./sha256";
-import { csvCell } from "./csv";
+import { api, type AuditAppend, type AuditRecord } from "@/lib/api";
+import { csvRows } from "@/lib/csv";
 
-export type AuditSeverity = "info" | "warning" | "critical" | "success";
-export type AuditCategory =
-  | "auth"
-  | "client"
-  | "policy"
-  | "commission"
-  | "compliance"
-  | "agent"
-  | "communication"
-  | "call"
-  | "supervisor"
-  | "retention"
-  | "knowledge_base"
-  | "security"
-  | "campaign"
-  | "system";
+// Declared once in auditChain, which the API imports too, so a category the UI
+// knows cannot be one the server rejects.
+export {
+  AUDIT_CATEGORIES,
+  AUDIT_SEVERITIES,
+  type AuditCategory,
+  type AuditSeverity,
+} from "@/lib/auditChain";
+import type { AuditCategory, AuditSeverity } from "@/lib/auditChain";
 
-export interface AuditEntry {
-  id: string;
-  timestamp: string; // ISO 8601
-  actor: string; // user / agent / system
-  actorId: string;
-  action: string;
-  category: AuditCategory;
-  entity: string;
-  entityId: string;
-  severity: AuditSeverity;
-  details: string;
-  sessionId: string;
-  ipAddress: string;
-  userAgent: string;
-  hash: string; // SHA-256 over prevHash + every field above
-  prevHash: string;
-}
+/** An entry as stored and returned by the server. */
+export type AuditEntry = AuditRecord;
 
 export interface AuditIntegrityResult {
   /** False only when a retained entry was mutated, removed, or reordered. */
   valid: boolean;
-  /** Index of the first entry that failed verification. */
+  /** Sequence number of the first entry that failed verification. */
   brokenAt: number | null;
-  /** True when the head of the chain has aged out of the retention window. */
+  /** True when entries are missing from the front of the chain. */
   truncated: boolean;
+  /** Human-readable explanation, present only when `valid` is false. */
+  reason?: string;
+  /** How many entries were checked. */
+  count: number;
 }
 
-/** Exported so tests and tooling do not have to hardcode the key. */
-export const AUDIT_STORAGE_KEY = "medicare_audit_log_v3";
+/** Unsent entries, so a reload mid-flush does not drop them. */
+const OUTBOX_KEY = "agencybridge_audit_outbox_v1";
+/** Ceiling on the outbox: a server that stays down must not fill storage. */
+const MAX_OUTBOX = 200;
+/** Batch window. Long enough to coalesce a burst, short enough to feel immediate. */
+const FLUSH_DELAY_MS = 400;
+/** Backoff ceiling after repeated failures, so an outage is not hammered. */
+const MAX_RETRY_DELAY_MS = 30_000;
 
-/** Predecessor hash of the first entry in an untruncated chain. */
-export const GENESIS_HASH = "0".repeat(64);
-
-/**
- * Stored shape: the entries and the boundary they were written with, in one
- * value.
- *
- * The boundary is the `prevHash` the retained head is expected to carry. A
- * counter of dropped entries is not enough — once retention has trimmed even
- * once, any later head deletion looks like more of the same rollover — so the
- * boundary itself pins where the window is supposed to start.
- *
- * It lives *inside* the payload rather than in a sibling key because two
- * `setItem` calls are not atomic: if the second failed, or another tab
- * interleaved between them, the boundary would disagree with the log and
- * verification would report perfectly good entries as tampered. One key, one
- * write, no window in which they can disagree.
- */
-interface StoredLog {
-  head: string;
-  entries: AuditEntry[];
-}
-
-const MAX_ENTRIES = 2000;
-const MAX_ENTRIES_UNDER_PRESSURE = 500;
-
-const SESSION_ID = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
-// ── Pub/Sub for real-time event streaming ──────────────────────────
-type AuditListener = (entry: AuditEntry) => void;
+type AuditListener = () => void;
 const listeners = new Set<AuditListener>();
 
-const channel: BroadcastChannel | null =
-  typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("medicare_audit_stream") : null;
-
-function emit(entry: AuditEntry) {
-  listeners.forEach((fn) => {
-    try {
-      fn(entry);
-    } catch {
-      /* a listener must never break the chain */
-    }
-  });
-}
-
-if (channel) {
-  channel.onmessage = (ev: MessageEvent<AuditEntry>) => {
-    if (ev.data && ev.data.id) emit(ev.data);
-  };
-}
-
-// Fallback for browsers without BroadcastChannel.
-if (typeof window !== "undefined" && !channel) {
-  window.addEventListener("storage", (ev) => {
-    if (ev.key === AUDIT_STORAGE_KEY && ev.newValue) {
-      try {
-        const { entries } = JSON.parse(ev.newValue) as StoredLog;
-        const last = Array.isArray(entries) ? entries[entries.length - 1] : undefined;
-        if (last) emit(last);
-      } catch {
-        /* ignore malformed cross-tab payload */
-      }
-    }
-  });
-}
-
-/** Subscribe to new audit entries as they are logged (same-tab + cross-tab). Returns an unsubscribe fn. */
+/** Notifies the UI that the trail may have changed, so views can refetch. */
 export function subscribeAuditLog(fn: AuditListener): () => void {
   listeners.add(fn);
-  return () => {
-    listeners.delete(fn);
-  };
+  return () => listeners.delete(fn);
 }
 
-function generateId(): string {
-  return `log_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+function notify(): void {
+  for (const fn of listeners) {
+    try {
+      fn();
+    } catch {
+      /* a broken listener must not stop the others */
+    }
+  }
 }
 
-function getSessionInfo() {
-  return {
-    sessionId: SESSION_ID,
-    ipAddress: "10.0.0.1", // placeholder: the browser cannot observe its own egress IP
-    userAgent: typeof navigator !== "undefined" ? navigator.userAgent.slice(0, 120) : "server",
-  };
+function readOutbox(): AuditAppend[] {
+  try {
+    const raw = localStorage.getItem(OUTBOX_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as AuditAppend[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeOutbox(entries: AuditAppend[]): void {
+  try {
+    localStorage.setItem(OUTBOX_KEY, JSON.stringify(entries.slice(-MAX_OUTBOX)));
+  } catch {
+    /* private mode or quota — the in-memory buffer still flushes this session */
+  }
 }
 
 /**
- * Canonical byte-string covering every field an auditor would rely on.
- * Field values are length-prefixed so that content cannot be shifted across
- * delimiters to forge a colliding payload (e.g. an actor ending in "|").
+ * The queue of unsent entries, and the only place they live.
+ *
+ * Seeded from storage at load so entries that never reached the server survive
+ * a reload; `writeOutbox` mirrors it after every change. Holding a separate
+ * in-memory buffer *and* an outbox meant each entry sat in both, and a flush
+ * that concatenated the two posted everything twice — duplicate rows in a
+ * tamper-evident chain, which is a corruption of the record, not a cosmetic
+ * bug. One queue, mirrored; never two sources added together.
  */
-function canonicalPayload(e: AuditEntry): string {
-  const parts = [
-    e.id, e.timestamp, e.actor, e.actorId, e.action, e.category,
-    e.entity, e.entityId, e.severity, e.details, e.sessionId, e.ipAddress, e.userAgent,
-  ];
-  return parts.map((p) => `${String(p).length}:${p}`).join("|");
-}
+let queue: AuditAppend[] = readOutbox();
+let timer: ReturnType<typeof setTimeout> | null = null;
+let failures = 0;
 
-function hashEntry(entry: AuditEntry): string {
-  return sha256Hex(`${entry.prevHash}|${canonicalPayload(entry)}`);
-}
+/**
+ * The request currently on the wire, or null.
+ *
+ * A promise rather than a boolean because callers need to *wait* for it. This
+ * held `false`/`true`, and `flushAuditLog` returned as soon as it saw `true` —
+ * so sign-out's "deliver, then revoke" sequence revoked the cookie while the
+ * delivery it had just awaited was still in the air.
+ */
+let inFlight: Promise<void> | null = null;
 
-/** Read all audit entries from localStorage. */
-export function getAuditLog(): AuditEntry[] {
-  return readStored().entries;
-}
+/**
+ * Bumped by `discardAuditQueue`.
+ *
+ * A request already in flight when the queue is discarded belongs to a session
+ * that no longer exists. Its completion must not touch the queue that replaced
+ * it — see the guard in `send`.
+ */
+let generation = 0;
 
-function readStored(): StoredLog {
+/**
+ * How many entries at the head of the queue are already on the wire.
+ *
+ * `send` slices its batch but does not remove it until the server answers, so
+ * those entries sit in `queue` for the whole request. Sign-out takes from the
+ * queue directly, and without this it handed the open request's own entries to
+ * the logout request as well — two rows in a tamper-evident chain for one
+ * action, each hashing correctly, indistinguishable from two things having
+ * happened. A duplicate there is worse than a gap: a gap is visible as a gap.
+ */
+let inFlightCount = 0;
+
+/** How many entries one request may carry; the server rejects more. */
+const MAX_BATCH = 25;
+
+/**
+ * Sends one batch.
+ *
+ * Entries leave the queue only once the server has accepted them. A batch
+ * rejected for a transient reason (offline, signed out, rate-limited) stays
+ * queued for the next attempt; one rejected as invalid is dropped, because
+ * retrying it forever would block everything behind it.
+ *
+ * Every path that touches `queue` after the await is gated on the generation
+ * being unchanged. Without that gate a sign-out during a request removed
+ * `batch.length` entries from whatever queue existed when the request landed —
+ * and after a discard that is the *next* session's queue, so signing out while
+ * an append was in flight silently deleted up to 25 of the next user's entries.
+ */
+async function send(): Promise<void> {
+  const gen = generation;
+  const batch = queue.slice(0, MAX_BATCH);
+  inFlightCount = batch.length;
   try {
-    const raw = localStorage.getItem(AUDIT_STORAGE_KEY);
-    if (!raw) return { head: GENESIS_HASH, entries: [] };
-    const parsed = JSON.parse(raw) as Partial<StoredLog>;
-    return {
-      head: typeof parsed?.head === "string" ? parsed.head : GENESIS_HASH,
-      entries: Array.isArray(parsed?.entries) ? (parsed.entries as AuditEntry[]) : [],
-    };
-  } catch {
-    return { head: GENESIS_HASH, entries: [] };
-  }
-}
-
-/** Every field that goes into the hash must be a string, or the record is corrupt. */
-const HASHED_FIELDS = [
-  "id", "timestamp", "actor", "actorId", "action", "category",
-  "entity", "entityId", "severity", "details", "sessionId", "ipAddress", "userAgent",
-] as const;
-
-function isEntry(e: unknown): e is AuditEntry {
-  if (!e || typeof e !== "object") return false;
-  const c = e as Record<string, unknown>;
-  if (typeof c.hash !== "string" || typeof c.prevHash !== "string") return false;
-  return HASHED_FIELDS.every((f) => typeof c[f] === "string");
-}
-
-function write(kept: AuditEntry[]): void {
-  const payload: StoredLog = {
-    head: kept.length > 0 ? kept[0].prevHash : GENESIS_HASH,
-    entries: kept,
-  };
-  // One write: the entries and the boundary they belong to can never diverge.
-  localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(payload));
-}
-
-function persist(log: AuditEntry[]): void {
-  try {
-    write(log.slice(-MAX_ENTRIES));
-  } catch {
-    try {
-      write(log.slice(-MAX_ENTRIES_UNDER_PRESSURE));
-    } catch {
-      /* storage unavailable (private mode / quota) — in-memory listeners still fire */
+    await api.appendAudit(batch);
+    if (gen !== generation) return;
+    // Sliced from the queue as it stands *now*, not from a snapshot taken
+    // before the request: an entry logged while the request was in flight has
+    // been pushed onto the end, and rewriting a pre-flight copy over it would
+    // discard it silently.
+    queue = queue.slice(batch.length);
+    writeOutbox(queue);
+    notify();
+    if (queue.length > 0) schedule();
+    failures = 0;
+  } catch (err) {
+    if (gen !== generation) return;
+    const status = (err as { status?: number }).status ?? 0;
+    const retryable = status === 0 || status === 401 || status === 429 || status >= 500;
+    if (retryable) {
+      // Nothing else will come back for these: logAudit schedules a flush, but
+      // an idle tab may not log again for minutes, and until it does the
+      // entries sit unsent. Retry on a backoff instead of waiting to be
+      // prompted.
+      failures += 1;
+      schedule(Math.min(FLUSH_DELAY_MS * 2 ** failures, MAX_RETRY_DELAY_MS));
+    } else {
+      queue = queue.slice(batch.length);
+      writeOutbox(queue);
+      failures = 0;
     }
+  } finally {
+    inFlightCount = 0;
   }
 }
 
-/** Core logging function. Call from anywhere in the app. */
+/**
+ * Sends what is queued, and resolves when the wire is quiet.
+ *
+ * When a request is already in flight the caller gets *that* promise, not an
+ * immediately-resolved one. The distinction is the whole point: `flushAuditLog`
+ * is awaited by sign-out before the cookie is revoked, and a flush that
+ * resolved early let the revoke overtake the delivery it was supposed to
+ * follow.
+ */
+function flush(): Promise<void> {
+  if (inFlight !== null) {
+    // Entries added during the current request are not in it. Leave a timer so
+    // they go out on their own rather than waiting for the next unrelated call.
+    if (queue.length > 0) schedule();
+    return inFlight;
+  }
+  if (queue.length === 0) return Promise.resolve();
+
+  const run = send();
+  inFlight = run.finally(() => {
+    inFlight = null;
+  });
+  return inFlight;
+}
+
+function schedule(delay: number = FLUSH_DELAY_MS): void {
+  if (timer !== null) return;
+  timer = setTimeout(() => {
+    timer = null;
+    void flush();
+  }, delay);
+}
+
+/**
+ * Records an action. Fire-and-forget by design: the ~24 call sites are UI
+ * handlers, and none of them should await a network round trip to render.
+ *
+ * `actor` and `actorId` are accepted for call-site compatibility and then
+ * ignored — the server attributes every entry to the session that sent it. A
+ * client that could name its own actor could blame somebody else.
+ */
 export function logAudit(params: {
-  actor: string;
+  actor?: string;
   actorId?: string;
   action: string;
   category: AuditCategory;
@@ -227,136 +239,124 @@ export function logAudit(params: {
   severity?: AuditSeverity;
   details?: string;
 }): void {
-  const log = getAuditLog();
-  const session = getSessionInfo();
-
-  const entry: AuditEntry = {
-    id: generateId(),
-    timestamp: new Date().toISOString(),
-    actor: params.actor,
-    actorId: params.actorId || "unknown",
+  const entry: AuditAppend = {
     action: params.action,
     category: params.category,
     entity: params.entity,
-    entityId: params.entityId || "",
+    entityId: params.entityId || "-",
     severity: params.severity || "info",
     details: params.details || "",
-    sessionId: session.sessionId,
-    ipAddress: session.ipAddress,
-    userAgent: session.userAgent,
-    hash: "",
-    prevHash: log.length > 0 ? log[log.length - 1].hash : GENESIS_HASH,
   };
-
-  // Hashed synchronously: an async digest would let the next entry chain against
-  // a placeholder hash, silently corrupting the chain under normal use.
-  entry.hash = hashEntry(entry);
-
-  log.push(entry);
-  persist(log);
-
-  const icon = { info: "•", warning: "⚠", critical: "✖", success: "✓" }[entry.severity];
-  // eslint-disable-next-line no-console
-  console.log(`${icon} [AUDIT] ${entry.category.toUpperCase()} ${entry.action} — ${entry.entity} (${entry.actor})`);
-
-  emit(entry);
-
-  if (channel) {
-    try {
-      channel.postMessage(entry);
-    } catch {
-      /* broadcast is best-effort */
-    }
-  }
+  queue.push(entry);
+  writeOutbox(queue);
+  schedule();
 }
 
 /**
- * Recompute the chain and report the first entry that fails.
+ * Hands the caller what is queued and clears the queue in the same step.
  *
- * A head that no longer starts at genesis means the retention window rolled over,
- * which is expected operation rather than tampering — it is reported via
- * `truncated` so the UI does not raise a false alarm, and every retained entry is
- * still verified.
+ * Sign-out uses this to carry its leftovers in the request that revokes the
+ * session, so there is no interval between delivering them and the cookie they
+ * are authenticated by going away. Capped at what one request may carry, and
+ * excluding anything already on the wire; the remainder is dropped, and if the
+ * open request then fails its entries are lost with it. Both are the loss
+ * recorded as R-031, taken deliberately over delivering an entry twice.
  */
-export function verifyAuditIntegrity(): AuditIntegrityResult {
-  const { head: expectedHeadPrev, entries: log } = readStored();
-
-  for (let i = 0; i < log.length; i++) {
-    const entry = log[i];
-
-    // A malformed record is corruption. Report it rather than throwing, which
-    // would drop the Security page into the global error boundary.
-    if (!isEntry(entry)) return { valid: false, brokenAt: i, truncated: false };
-
-    if (i > 0 && entry.prevHash !== log[i - 1].hash) {
-      return { valid: false, brokenAt: i, truncated: false };
-    }
-    if (hashEntry(entry) !== entry.hash) {
-      return { valid: false, brokenAt: i, truncated: false };
-    }
-  }
-
-  // Checked only once the chain has verified, so `truncated` never appears
-  // alongside a failure. The head must sit exactly where retention last left it;
-  // anything else means entries were removed from the front by something other
-  // than the retention cap.
-  if (log.length > 0 && log[0].prevHash !== expectedHeadPrev) {
-    return { valid: false, brokenAt: 0, truncated: false };
-  }
-
-  return { valid: true, brokenAt: null, truncated: expectedHeadPrev !== GENESIS_HASH };
-}
-
-/** Export log as CSV (SOC 2 evidence artifact). */
-export function exportAuditCSV(): string {
-  const log = getAuditLog();
-  const headers = [
-    "id", "timestamp", "actor", "actorId", "action", "category",
-    "entity", "entityId", "severity", "details", "sessionId", "ipAddress", "hash", "prevHash",
-  ];
-  const rows = log.map((e) =>
-    [
-      e.id, e.timestamp, e.actor, e.actorId, e.action, e.category, e.entity,
-      e.entityId, e.severity, e.details, e.sessionId, e.ipAddress, e.hash, e.prevHash,
-    ]
-      .map(csvCell)
-      .join(","),
-  );
-  return [headers.join(","), ...rows].join("\n");
+export function takeAuditQueue(): AuditAppend[] {
+  // Skips whatever a request already in flight is carrying. Those entries are
+  // still in the queue — they leave it only when the server answers — and
+  // handing them over again would deliver each one twice.
+  const pending = queue.slice(inFlightCount, inFlightCount + MAX_BATCH);
+  discardAuditQueue();
+  return pending;
 }
 
 /**
- * Clear the audit log. Admin-only.
+ * Drops anything still queued.
  *
- * The clear is not silent: the emptied log is re-seeded with a genesis entry
- * recording who cleared it, so the erasure itself remains auditable. The role
- * check is advisory in a browser-only build (see RISKS R-002).
+ * Called at sign-out, after a final flush attempt. Entries name no actor — the
+ * server attributes them to whoever is signed in when they arrive — so an entry
+ * left over from one session and delivered during the next would be recorded
+ * against the wrong person. An audit trail that misattributes is worse than one
+ * with a gap, so the gap is the deliberate choice.
  */
-export function clearAuditLog(
-  callerRole?: string,
-  actor = "system",
-  actorId = "unknown",
-): { success: boolean; error?: string } {
-  if (callerRole !== "admin") {
-    return { success: false, error: "Unauthorized: only administrators may clear the audit log." };
+export function discardAuditQueue(): void {
+  // Invalidates any request still in flight, so its completion cannot reach
+  // into the queue that replaces this one.
+  generation += 1;
+  queue = [];
+  // The count indexes positions in the queue being discarded, and the queue
+  // that replaces it starts at zero. Left standing it described a batch from a
+  // session that is gone, so the *next* sign-out skipped that many entries of
+  // the new session's queue and dropped them. `takeAuditQueue` reads the count
+  // before calling this, so the call that needs it still gets it.
+  inFlightCount = 0;
+  failures = 0;
+  if (timer !== null) {
+    clearTimeout(timer);
+    timer = null;
   }
+  writeOutbox(queue);
+}
 
-  const priorCount = getAuditLog().length;
-  try {
-    localStorage.removeItem(AUDIT_STORAGE_KEY);
-  } catch {
-    /* fall through — the re-seed below is what matters */
+/** Sends anything buffered right now, without waiting for the batch window. */
+export function flushAuditLog(): Promise<void> {
+  if (timer !== null) {
+    clearTimeout(timer);
+    timer = null;
   }
+  return flush();
+}
 
-  logAudit({
-    actor,
-    actorId,
-    action: "audit_log_cleared",
-    category: "security",
-    entity: "audit_log",
-    severity: "critical",
-    details: `Audit log cleared by ${actor}; ${priorCount} prior entries discarded.`,
+// Leaving the page is the last chance to deliver. Without this the entries
+// survive — the outbox is written on every change — but they sit there until
+// somebody opens the app again, which for a closed tab may be never.
+// `pagehide` rather than `beforeunload`: it fires for the bfcache and on
+// mobile, where `beforeunload` frequently does not.
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => {
+    void flushAuditLog();
   });
+}
 
-  return { success: true };
+// Anything recovered from a previous page load is sent without waiting for the
+// user to happen to do something else; an idle tab would otherwise hold it
+// indefinitely.
+if (queue.length > 0) schedule();
+
+/** How many entries are waiting to reach the server. */
+export function pendingAuditCount(): number {
+  return queue.length;
+}
+
+/** The tenant's trail, newest first. Requires permission to read the log. */
+export function fetchAuditLog(limit = 200): Promise<AuditEntry[]> {
+  return api.auditEntries(limit);
+}
+
+/** The server's verdict on the chain. Recomputed there, from the stored rows. */
+export function fetchAuditIntegrity(): Promise<AuditIntegrityResult> {
+  return api.auditVerify();
+}
+
+/**
+ * CSV of the supplied entries.
+ *
+ * Takes entries rather than fetching them so the export always matches what the
+ * operator is looking at. `csvRows` escapes every cell, neutralising leading
+ * `= + - @` and control characters — a carrier name or a details string is
+ * attacker-influenced text, and a spreadsheet will happily execute it.
+ */
+export function exportAuditCSV(entries: readonly AuditEntry[]): string {
+  const header = [
+    "Seq", "Timestamp", "Actor", "Actor ID", "Action", "Category",
+    "Entity", "Entity ID", "Severity", "Details", "Session", "IP", "User Agent", "Hash",
+  ];
+  const rows = entries.map((e) => [
+    e.seq, e.timestamp, e.actor, e.actorId, e.action, e.category,
+    e.entity, e.entityId, e.severity, e.details, e.sessionId, e.ipAddress, e.userAgent, e.hash,
+  ]);
+  // csvRows escapes each cell itself; mapping csvCell first quoted everything
+  // twice, so a spreadsheet showed `"""Patricia Chen"""` rather than the name.
+  return csvRows([header, ...rows]);
 }

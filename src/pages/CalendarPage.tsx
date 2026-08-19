@@ -8,7 +8,7 @@ import { StatusBadge } from "@/components/shared/StatusBadge";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { type AppointmentType } from "@/lib/mockData";
-import { scopedAppointments } from "@/lib/dataScope";
+import { useAppointments } from "@/hooks/useBook";
 import { ScopeBadge } from "@/components/shared/ScopeBadge";
 import { cn } from "@/lib/utils";
 import {
@@ -36,7 +36,7 @@ export default function CalendarPage() {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
 
-  const scopedAppts = useMemo(() => scopedAppointments(user), [user]);
+  const scopedAppts = useAppointments();
 
   const days = useMemo(() => {
     const start = startOfWeek(startOfMonth(currentMonth));

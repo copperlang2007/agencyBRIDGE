@@ -2,7 +2,20 @@
 
 **Agent:** Claude Code · **Date:** 2026-08-19 · **Contract:** Build Contract OS v1
 **Entry state:** ungoverned repository, no contract artifacts, 38 tests, live at https://agencybridge.vercel.app
-**Exit state:** governed, 78 tests, six defect classes fixed — **Forge Gate NOT clear**
+**Exit state:** governed, real backend, gated demo, 132 tests — **Forge Gate NOT clear**
+
+> **Pass 2 (this pass).** The owner answered D-006 with *both*. agencyBRIDGE now
+> has a server: credentials verified with scrypt, sessions issued and revoked
+> server-side, the book of business scoped in SQL, and the audit chain hashed and
+> verified in Postgres. The public deployment runs an explicitly gated, read-only
+> demo tenant. **R-001, R-002 and R-010 are closed**; R-003 is advanced but not
+> closed. Evidence: `EV-010-backend-and-demo.md`. Decisions: D-010 … D-014.
+>
+> The gate stays NOT clear. What blocks it now is different from what blocked it
+> before: the CMS 42 CFR claim still overstates the system (R-003), the
+> deployment has no `DATABASE_URL` until an operator sets one (R-012), no API
+> handler has an automated test (R-005), and the page layer has still never been
+> red-teamed (R-007).
 
 ## Completed
 
@@ -23,6 +36,13 @@
 | Detector handles chargebacks and zero-pay | EV-003 — 18/18 plus browser run of the real form |
 | All 23 routes render under lazy loading | EV-005 — headless navigation, no JS errors |
 | One identity, legible 16–64px, light and dark | EV-004 — rendered at four sizes on two grounds |
+| Unauthenticated callers get no data | EV-010 — `GET /api/book/clients` → 401, before and after logout |
+| An agent sees only their own book | EV-010 — 10 clients vs an admin's 48, in the API and on screen |
+| An agent cannot write to another agent's client | EV-010 — 404, row confirmed unchanged |
+| Tenants are isolated | EV-010 — a second tenant's admin saw 1 client, none of the demo's 48 |
+| The demo refuses writes server-side | EV-010 — 403 `demo_read_only` |
+| Database tampering is detected and surfaced | EV-010 — edit, middle-delete and head-delete each caught; UI read "Broken at #1" |
+| "No such account" is not distinguishable by timing | EV-010 — 465 ms systematic gap found and removed |
 
 ## Changed Files
 

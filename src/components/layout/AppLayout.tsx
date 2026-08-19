@@ -4,7 +4,7 @@ import { Topbar } from "./Topbar";
 import { AgentAssist } from "@/components/shared/AgentAssist";
 import { cn } from "@/lib/utils";
 import { useRole, roleLabels } from "@/lib/roleContext";
-import { Eye, X, Menu } from "lucide-react";
+import { Eye, X, Menu, FlaskConical } from "lucide-react";
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -13,7 +13,7 @@ interface AppLayoutProps {
 export function AppLayout({ children }: AppLayoutProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const { isImpersonating, originalUser, user, endImpersonation } = useRole();
+  const { isImpersonating, originalUser, user, endImpersonation, isDemo } = useRole();
 
   return (
     <div className="min-h-screen bg-background">
@@ -29,6 +29,17 @@ export function AppLayout({ children }: AppLayoutProps) {
           collapsed ? "lg:ml-[76px]" : "lg:ml-64"
         )}
       >
+        {/* Demo state is a property of the session, so it is stated on every
+            page rather than only at the door the visitor came through. */}
+        {isDemo && (
+          <div className="flex items-center gap-3 px-4 sm:px-6 py-2 bg-sky-500/10 border-b border-sky-500/30 text-sky-800 dark:text-sky-300 text-sm">
+            <FlaskConical className="h-4 w-4 shrink-0" />
+            <span className="font-medium">Demo</span>
+            <span className="text-sky-700/80 dark:text-sky-400/80">
+              Sample agency, invented data. Changes are disabled.
+            </span>
+          </div>
+        )}
         {isImpersonating && originalUser && user && (
           <div className="flex items-center gap-3 px-4 sm:px-6 py-2 bg-amber-500/10 border-b border-amber-500/30 text-amber-700 dark:text-amber-300 text-sm">
             <Eye className="h-4 w-4 shrink-0" />
