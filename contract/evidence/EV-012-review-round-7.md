@@ -320,3 +320,50 @@ npm test            160 passed (11 files)
 npm run build       clean
 node scripts/assert-spa-rewrite.mjs   OK
 ```
+
+---
+
+# Round 11 — the revoke was hostage to the lookup
+
+One finding on `6db5acb`, and it is the third consecutive round in which the fix
+for the previous round's defect introduced the next one. That is worth naming
+again rather than quietly patching.
+
+Round 10 wrapped the handler in `try { … } finally { if (!revoked)
+clearSessionCookie(res) }` so that no exit could skip the cookie decision. It
+does that correctly. What it also did was put `revokeSession(token)` *inside*
+the same `try`, after `await currentSession(req)` — so a failing session lookup
+skipped the revoke entirely. The `finally` still ran, so the browser lost its
+cookie and the caller saw the login screen, while the token stayed live on the
+server. Signed out in appearance only, and still usable by anyone who had
+captured it. That is a worse outcome than the round-10 defect it replaced,
+because it is silent on both sides.
+
+The lookup decides **attribution for the audit entries and nothing else**. It
+now has its own `try`/`catch` and yields `null` on failure; the revoke is
+attempted regardless. Losing the attribution costs an audit entry. Losing the
+revoke costs the session.
+
+## A false success, removed while here
+
+With the revoke now independent, the case "there was a token and it could not be
+revoked" is reachable and distinct — and the handler answered `200 {ok:true}`
+for it. That is a false claim about the one thing the endpoint exists to do. It
+now returns `503 revoke_failed` after clearing the cookie, so the browser is
+still left holding nothing usable and the response says what actually happened.
+The client ignores the status either way; the value is that the failure is
+visible in logs and monitoring rather than reported as success.
+
+## No test, again
+
+Both changes are in a handler. A handler suite needs a database in CI (R-005),
+so this was derived by reading the control flow, exactly as rounds 9 and 10's
+logout fixes were. Three fixes to this file now rest on reading rather than
+execution, which is itself an argument for the change recorded under R-014.
+
+```
+npm run typecheck   clean
+npm test            160 passed (11 files)     unchanged; no client code touched
+npm run build       clean
+node scripts/assert-spa-rewrite.mjs   OK
+```
