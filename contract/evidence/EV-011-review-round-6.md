@@ -287,7 +287,7 @@ Two numbers and one statement in EV-010 were wrong, and review was right to
 check them against the tree rather than take them:
 
 - Test counts quoted figures from mid-pass runs. They now match what `npm test`
-  reports at this commit: **143 across 10 files**.
+  reports at this commit: **143 across 10 files** (145 after review round 7).
 - "No server code shipped to client" was false as stated. The export feature
   deliberately ships `api/` and `db/` as raw text so the downloadable zip is
   runnable. What that exposes is implementation, not secrets — scrypt cost

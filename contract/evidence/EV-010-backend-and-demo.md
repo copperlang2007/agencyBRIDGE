@@ -233,7 +233,7 @@ images this sandbox cannot reach (R-006) and the 403/401 from the deliberate
 negative tests above.
 
 Tests added over this pass and the review rounds that followed it: `scope` (17),
-`permissions` (18), `auditChain` (21), `password` (12), `auditTransport` (9).
+`permissions` (18), `auditChain` (20), `password` (12), `auditTransport` (11).
 The counts here are the ones `npm test` reports at this commit; earlier drafts of
 this file quoted figures from mid-pass runs, which review correctly caught as
 inconsistent with the tree.

@@ -101,27 +101,50 @@ function writeOutbox(entries: AuditAppend[]): void {
  */
 let queue: AuditAppend[] = readOutbox();
 let timer: ReturnType<typeof setTimeout> | null = null;
-let inFlight = false;
 let failures = 0;
+
+/**
+ * The request currently on the wire, or null.
+ *
+ * A promise rather than a boolean because callers need to *wait* for it. This
+ * held `false`/`true`, and `flushAuditLog` returned as soon as it saw `true` —
+ * so sign-out's "deliver, then revoke" sequence revoked the cookie while the
+ * delivery it had just awaited was still in the air.
+ */
+let inFlight: Promise<void> | null = null;
+
+/**
+ * Bumped by `discardAuditQueue`.
+ *
+ * A request already in flight when the queue is discarded belongs to a session
+ * that no longer exists. Its completion must not touch the queue that replaced
+ * it — see the guard in `send`.
+ */
+let generation = 0;
 
 /** How many entries one request may carry; the server rejects more. */
 const MAX_BATCH = 25;
 
 /**
- * Sends what is queued.
+ * Sends one batch.
  *
  * Entries leave the queue only once the server has accepted them. A batch
  * rejected for a transient reason (offline, signed out, rate-limited) stays
  * queued for the next attempt; one rejected as invalid is dropped, because
  * retrying it forever would block everything behind it.
+ *
+ * Every path that touches `queue` after the await is gated on the generation
+ * being unchanged. Without that gate a sign-out during a request removed
+ * `batch.length` entries from whatever queue existed when the request landed —
+ * and after a discard that is the *next* session's queue, so signing out while
+ * an append was in flight silently deleted up to 25 of the next user's entries.
  */
-async function flush(): Promise<void> {
-  if (inFlight || queue.length === 0) return;
-
-  inFlight = true;
+async function send(): Promise<void> {
+  const gen = generation;
   const batch = queue.slice(0, MAX_BATCH);
   try {
     await api.appendAudit(batch);
+    if (gen !== generation) return;
     // Sliced from the queue as it stands *now*, not from a snapshot taken
     // before the request: an entry logged while the request was in flight has
     // been pushed onto the end, and rewriting a pre-flight copy over it would
@@ -132,6 +155,7 @@ async function flush(): Promise<void> {
     if (queue.length > 0) schedule();
     failures = 0;
   } catch (err) {
+    if (gen !== generation) return;
     const status = (err as { status?: number }).status ?? 0;
     const retryable = status === 0 || status === 401 || status === 429 || status >= 500;
     if (retryable) {
@@ -146,9 +170,32 @@ async function flush(): Promise<void> {
       writeOutbox(queue);
       failures = 0;
     }
-  } finally {
-    inFlight = false;
   }
+}
+
+/**
+ * Sends what is queued, and resolves when the wire is quiet.
+ *
+ * When a request is already in flight the caller gets *that* promise, not an
+ * immediately-resolved one. The distinction is the whole point: `flushAuditLog`
+ * is awaited by sign-out before the cookie is revoked, and a flush that
+ * resolved early let the revoke overtake the delivery it was supposed to
+ * follow.
+ */
+function flush(): Promise<void> {
+  if (inFlight !== null) {
+    // Entries added during the current request are not in it. Leave a timer so
+    // they go out on their own rather than waiting for the next unrelated call.
+    if (queue.length > 0) schedule();
+    return inFlight;
+  }
+  if (queue.length === 0) return Promise.resolve();
+
+  const run = send();
+  inFlight = run.finally(() => {
+    inFlight = null;
+  });
+  return inFlight;
 }
 
 function schedule(delay: number = FLUSH_DELAY_MS): void {
@@ -200,6 +247,9 @@ export function logAudit(params: {
  * with a gap, so the gap is the deliberate choice.
  */
 export function discardAuditQueue(): void {
+  // Invalidates any request still in flight, so its completion cannot reach
+  // into the queue that replaces this one.
+  generation += 1;
   queue = [];
   failures = 0;
   if (timer !== null) {

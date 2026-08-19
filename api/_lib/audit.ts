@@ -256,7 +256,10 @@ export async function verifyAudit(tenantId: string): Promise<ChainIntegrityResul
     return {
       valid: false,
       brokenAt: Number(last.seq),
-      truncated: true,
+      // Not truncated: the walk above already established that this chain
+      // starts at seq 1 and links from genesis, so nothing is missing from the
+      // front. What is missing is the means to check the *end*.
+      truncated: false,
       reason: "No recorded head for this chain, so entries removed from the end could not be detected.",
       count: entries.length,
     };
@@ -266,7 +269,10 @@ export async function verifyAudit(tenantId: string): Promise<ChainIntegrityResul
     return {
       valid: false,
       brokenAt: Number(marker.seq),
-      truncated: true,
+      // Entries were removed from the end, which `truncated` does not describe:
+      // it means the head aged out of a retention window. Reporting it here
+      // would have a consumer read deliberate retention into a deletion.
+      truncated: false,
       reason: `The chain ends at entry ${last.seq}, but entry ${marker.seq} was recorded. Later entries have been removed.`,
       count: entries.length,
     };

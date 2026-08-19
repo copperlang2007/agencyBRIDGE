@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, ApiError } from "@/lib/api";
 import { discardAuditQueue, flushAuditLog, logAudit } from "@/lib/auditLog";
 import {
@@ -56,7 +56,8 @@ interface RoleContextValue {
   setRole: (role: RoleId) => void;
   login: (email: string, password: string) => Promise<AuthResult>;
   enterDemo: (role: RoleId) => Promise<AuthResult>;
-  logout: () => void;
+  /** Resolves once the session has been revoked server-side. */
+  logout: () => Promise<void>;
   hasAccess: (route: string) => boolean;
   can: (action: string) => boolean;
   roleLabel: string;
@@ -74,6 +75,19 @@ export function RoleProvider({ children }: { children: ReactNode }) {
   const [originalUser, setOriginalUser] = useState<UserInfo | null>(null);
   const [isDemo, setIsDemo] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  /**
+   * A sign-out that has not finished revoking yet.
+   *
+   * Sign-out cannot revoke first: the entries it still has to deliver are
+   * authenticated by the very cookie the revoke destroys. So there is a window
+   * where the UI shows the login screen while a valid cookie is still on its
+   * way to `/api/auth/logout`. Authenticating inside that window replaces the
+   * cookie, and the revoke — which names no session, only "whoever is calling"
+   * — then lands on the session that was just created. `login` and `enterDemo`
+   * wait this out rather than racing it.
+   */
+  const pendingLogout = useRef<Promise<void> | null>(null);
 
   /** Pulls the session from the server; the single place identity is set. */
   const refresh = useCallback(async () => {
@@ -101,6 +115,7 @@ export function RoleProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const login = useCallback(async (email: string, password: string): Promise<AuthResult> => {
+    await pendingLogout.current;
     try {
       const result = await api.login(email, password);
       setUser(result.user);
@@ -119,6 +134,7 @@ export function RoleProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const enterDemo = useCallback(async (role: RoleId): Promise<AuthResult> => {
+    await pendingLogout.current;
     try {
       const result = await api.enterDemo(role);
       setUser(result.user);
@@ -132,23 +148,32 @@ export function RoleProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const logout = useCallback(() => {
+  const logout = useCallback((): Promise<void> => {
     // Clear locally at once so the UI cannot keep rendering a signed-in shell,
     // then revoke on the server. The revoke is what actually ends the session.
     setUser(null);
     setOriginalUser(null);
     setIsDemo(false);
 
-    void (async () => {
+    const run = (async () => {
       // Deliver what this session recorded while its cookie is still valid,
       // revoke, then drop anything that did not make it. Entries carry no
       // actor — the server attributes them to whoever is signed in when they
       // arrive — so leftovers delivered after the next sign-in would be
-      // recorded against the wrong person.
+      // recorded against the wrong person. The discard is unconditional for
+      // the same reason: a failed revoke leaves entries the client can no
+      // longer prove belong to anybody, and a gap in the trail is a better
+      // outcome than an entry filed under the wrong name (R-031).
       await flushAuditLog().catch(() => undefined);
       await api.logout().catch(() => undefined);
       discardAuditQueue();
     })();
+
+    pendingLogout.current = run;
+    void run.finally(() => {
+      if (pendingLogout.current === run) pendingLogout.current = null;
+    });
+    return run;
   }, []);
 
   /**
@@ -226,7 +251,7 @@ const nullContextValue: RoleContextValue = {
   setRole: () => {},
   login: async () => ({ success: false, error: "Not initialized" }),
   enterDemo: async () => ({ success: false, error: "Not initialized" }),
-  logout: () => {},
+  logout: async () => {},
   hasAccess: () => false,
   can: () => false,
   roleLabel: "",

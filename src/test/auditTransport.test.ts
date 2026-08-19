@@ -182,3 +182,66 @@ describe("failure handling", () => {
     expect(sent.map((e) => e.entityId)).toEqual(["kept"]);
   });
 });
+
+describe("sign-out", () => {
+  it("does not let a discarded session's request eat the next session's entries", async () => {
+    // The defect: `discardAuditQueue` emptied the queue but left the in-flight
+    // request running, and that request finished by removing `batch.length`
+    // entries from whatever queue existed when it landed. After a discard that
+    // is the *next* session's queue, so signing out mid-append silently
+    // deleted up to 25 of the next user's entries — from an audit trail, with
+    // nothing to show it had happened.
+    const { logAudit, flushAuditLog, discardAuditQueue, pendingAuditCount } = await freshModule();
+
+    let release: (v: { written: number }) => void = () => {};
+    appendAudit.mockImplementationOnce(
+      () => new Promise((resolve) => { release = resolve; }),
+    );
+
+    logAudit({ action: "A", category: "client", entity: "e", entityId: "old-session" });
+    const inFlight = flushAuditLog();
+
+    // Sign-out: the queue is dropped while the request is still open.
+    discardAuditQueue();
+
+    // The next session starts logging before the old request comes back.
+    logAudit({ action: "B", category: "client", entity: "e", entityId: "new-session" });
+
+    release({ written: 1 });
+    await inFlight;
+
+    expect(pendingAuditCount()).toBe(1);
+
+    appendAudit.mockResolvedValue({ written: 1 });
+    await flushAuditLog();
+
+    const sent = appendAudit.mock.calls.flatMap((c) => c[0] as { entityId: string }[]);
+    expect(sent.map((e) => e.entityId)).toEqual(["old-session", "new-session"]);
+  });
+
+  it("waits for a request already in flight rather than resolving straight away", async () => {
+    // Sign-out awaits this before revoking the cookie. Returning early meant
+    // the revoke could overtake the delivery it was supposed to follow, and the
+    // entries were then discarded unsent.
+    const { logAudit, flushAuditLog } = await freshModule();
+
+    let release: (v: { written: number }) => void = () => {};
+    let settled = false;
+    appendAudit.mockImplementationOnce(
+      () => new Promise((resolve) => { release = resolve; }),
+    );
+
+    logAudit({ action: "A", category: "client", entity: "e" });
+    const first = flushAuditLog();
+
+    // A second caller arriving while the first request is open.
+    const second = flushAuditLog().then(() => { settled = true; });
+
+    await Promise.resolve();
+    expect(settled, "flushAuditLog resolved before the request came back").toBe(false);
+
+    release({ written: 1 });
+    await Promise.all([first, second]);
+    expect(settled).toBe(true);
+  });
+});
