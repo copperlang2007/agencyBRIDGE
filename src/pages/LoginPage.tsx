@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ShieldCheck, Lock, Mail, Loader2, AlertCircle, Eye, EyeOff } from "lucide-react";
+import { BrandMark } from "@/components/shared/BrandMark";
 
 export default function LoginPage() {
   const { login } = useRole();
@@ -39,10 +40,8 @@ export default function LoginPage() {
       <div className="relative w-full max-w-md">
         {/* Brand header */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500 to-blue-700 shadow-lg shadow-blue-500/30 mb-4">
-            <ShieldCheck className="h-9 w-9 text-white" />
-          </div>
-          <h1 className="text-2xl font-display font-bold text-white tracking-tight font-sans shadow-sm">agencyBRIDGE</h1>
+          <BrandMark size={64} tone="light" className="mx-auto mb-4 shadow-lg shadow-blue-500/30 rounded-2xl" />
+          <h1 className="text-2xl font-display font-bold text-white tracking-tight">agencyBRIDGE</h1>
           <p className="text-sm text-blue-200/70 mt-1">Medicare Agency Management Platform</p>
         </div>
 

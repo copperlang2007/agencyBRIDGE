@@ -1,0 +1,53 @@
+project:
+  id: agencybridge
+  contract_version: "1.0"
+  repository: copperlang2007/agencyBRIDGE
+  control_plane: copperlang2007/build-contract-os
+  production_url: https://agencybridge.vercel.app
+state:
+  phase: "1"
+  status: quality-hardening-pending-security-architecture
+next_action:
+  id: SEC-001
+  description: >-
+    Resolve R-001. Either move authentication server-side (real backend verifying
+    credentials and issuing a session), or, if agencyBRIDGE is to remain a
+    mock-data demo, gate the public deployment behind Vercel password protection
+    and set robots noindex so a demo is not presented as a production system.
+    Requires an owner decision on which path; both are recorded in DECISIONS.md
+    as D-006 (undecided).
+completed:
+  - CONTRACT-001: Build Contract OS entrypoint, project contract, and state artifacts created
+  - AUDIT-001: Tamper-evident audit chain rebuilt on synchronous SHA-256; 6 defects fixed, 15 regression tests
+  - SHORTPAY-001: Short-pay detector extracted from LandingPage and corrected; 18 regression tests
+  - PERF-001: Route-level code splitting — entry chunk 2,804 kB to 1,040 kB (629 to 315 kB gzip)
+  - CI-001: GitHub Actions enforcing typecheck, test, build, and the SPA-rewrite assertion
+  - BRAND-001: Single canonical mark replacing three divergent identities (M+, aB, ShieldCheck)
+  - REVIEW-001: PR #4 review round — CSV escaping centralised in src/lib/csv.ts; truncation-forgery concern tested and shown already covered
+  - REVIEW-002: PR #4 review round 2 — 19 findings triaged; 12 real defects fixed with regression tests, 6 evidence/doc corrections, 1 recorded as R-010
+  - REVIEW-003: PR #4 review round 3 — 9 findings on round 2's fixes; head-boundary gap in my own fix closed, all accepted
+  - REVIEW-004: PR #4 review round 4 — 4 findings on round 3's fixes; cent round-trip and atomic log+boundary storage (D-009)
+gates:
+  contract: established
+  ip_reuse: inspected-bounded          # 1 of 88 portfolio repos scanned with evidence; see IP-MAP
+  architecture: documented
+  implementation: hardened
+  tests: 137-pass-narrow-coverage      # 5 of 14 lib modules covered; zero component tests
+  security: FAILED                     # R-001 client-side auth on a public deployment
+  redteam: partial                     # lib logic reviewed; 26 page components not reviewed
+  brand: package-delivered-motion-absent
+  deployment: previously-verified-branch-not-deployed
+  evidence: recorded
+forge_gate:
+  status: NOT_CLEAR
+  blocking:
+    - R-001  # authentication is client-side only on a public production URL
+    - R-003  # "audit logging meeting CMS 42 CFR requirements" is not met by browser-local storage
+    - GATE-REDTEAM  # adversarial review has not covered the page layer
+    - GATE-BRAND    # motion identity and owned social/OG assets outstanding
+last_verified: 2026-08-19
+last_agent: Claude Code (agencyBRIDGE quality pass)
+notes:
+  - HEAD verified against origin/main d76b293 before work began; local branch was stale and was reset.
+  - agencyBRIDGE is absent from build-contract-os/registry/PROJECT-REGISTRY.yaml (see D-002).
+  - Verification evidence is under contract/evidence/.

@@ -1,0 +1,24 @@
+× audit chain — integrity under normal use > F1: consecutive writes produce a chain that verifies (no async hash race) 13ms
+× audit chain — integrity under normal use > F1: chain still verifies after promise microtasks flush 5ms
+× audit chain — tamper detection > F2: mutating `details` is detected 3ms
+× audit chain — tamper detection > F2: mutating `actor` is detected 1ms
+× audit chain — tamper detection > F2: mutating `actorId` is detected 1ms
+× audit chain — tamper detection > F2: mutating `timestamp` is detected 1ms
+× audit chain — tamper detection > deleting a middle entry breaks linkage 1ms
+× audit chain — tamper detection > reordering entries breaks linkage 1ms
+× audit chain — truncation is not tampering > F6: a trimmed log reports truncated, not broken 1ms
+× audit chain — truncation is not tampering > a trimmed log still detects tampering inside the retained window 1ms
+× audit log — administrative controls > F4: clearing is itself recorded, so the erasure is not silent 1ms
+× audit log — CSV export > neutralizes spreadsheet formula injection in exported fields 1ms
+FAIL  src/test/auditLog.test.ts > audit chain — integrity under normal use > F1: consecutive writes produce a chain that verifies (no async hash race)
+FAIL  src/test/auditLog.test.ts > audit chain — integrity under normal use > F1: chain still verifies after promise microtasks flush
+FAIL  src/test/auditLog.test.ts > audit chain — tamper detection > F2: mutating `details` is detected
+FAIL  src/test/auditLog.test.ts > audit chain — tamper detection > F2: mutating `actor` is detected
+FAIL  src/test/auditLog.test.ts > audit chain — tamper detection > F2: mutating `actorId` is detected
+FAIL  src/test/auditLog.test.ts > audit chain — tamper detection > F2: mutating `timestamp` is detected
+FAIL  src/test/auditLog.test.ts > audit chain — tamper detection > deleting a middle entry breaks linkage
+FAIL  src/test/auditLog.test.ts > audit chain — tamper detection > reordering entries breaks linkage
+FAIL  src/test/auditLog.test.ts > audit chain — truncation is not tampering > F6: a trimmed log reports truncated, not broken
+FAIL  src/test/auditLog.test.ts > audit chain — truncation is not tampering > a trimmed log still detects tampering inside the retained window
+FAIL  src/test/auditLog.test.ts > audit log — administrative controls > F4: clearing is itself recorded, so the erasure is not silent
+FAIL  src/test/auditLog.test.ts > audit log — CSV export > neutralizes spreadsheet formula injection in exported fields
