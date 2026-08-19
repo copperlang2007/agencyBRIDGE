@@ -1,7 +1,7 @@
 # EV-008 — PR #4 review round 3
 
 **Timestamp:** 2026-08-19T01:44:19Z
-**Source:** automated review on pull request #4 (cubic-dev-ai), 9 findings against round 2's fixes
+**Source:** automated review on pull request #4 (cubic-dev-ai), 9 findings against round 2's fixes — the P1 below plus eight P2 rows
 
 Round 2's fixes were themselves reviewed. One finding was a genuine gap **in my
 own fix** and is the most important item in this round.
@@ -36,6 +36,7 @@ cannot leave a marker claiming a rollover that never happened.
 
 | Severity | Finding | Fix |
 |---|---|---|
+| P2 | The trim marker was written before the log write succeeded, so a failed write could leave a marker claiming a rollover that never happened. | Boundary written only alongside a successful log write. Superseded in round 4 by a single atomic payload — see EV-009. |
 | P2 | `isEntry` validated only `hash`/`prevHash`, so a record missing a hashed field reached the digest and failed for the wrong reason. | All 13 hashed fields must be strings. 5 new cases. |
 | P2 | `toCents` overflows near `Number.MAX_VALUE` — `Math.round(1e308*100)` is `Infinity`, and `Infinity - Infinity` is `NaN`, so **equal** huge payments classified as overpayments. | Amounts beyond `MAX_SAFE_INTEGER/100` are rejected as invalid. |
 | P2 | A third decimal place silently erased a real difference — `450.004` and `450.001` both round to 45000 cents. | More than two decimals is rejected unless the extra digits are padding zeros. |

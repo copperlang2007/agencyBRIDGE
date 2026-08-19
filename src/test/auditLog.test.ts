@@ -55,7 +55,7 @@ describe("audit chain — tamper detection", () => {
     logAudit(entry(1));
     const log = getAuditLog();
     log[0].details = "rewritten by an attacker";
-    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log));
+    writeEntries(log);
     expect(verifyAuditIntegrity()).toMatchObject({ valid: false, brokenAt: 0 });
   });
 
@@ -63,7 +63,7 @@ describe("audit chain — tamper detection", () => {
     logAudit(entry(0));
     const log = getAuditLog();
     log[0].actor = "someone_else";
-    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log));
+    writeEntries(log);
     expect(verifyAuditIntegrity().valid).toBe(false);
   });
 
@@ -71,7 +71,7 @@ describe("audit chain — tamper detection", () => {
     logAudit(entry(0));
     const log = getAuditLog();
     log[0].actorId = "escalated";
-    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log));
+    writeEntries(log);
     expect(verifyAuditIntegrity().valid).toBe(false);
   });
 
@@ -79,7 +79,7 @@ describe("audit chain — tamper detection", () => {
     logAudit(entry(0));
     const log = getAuditLog();
     log[0].timestamp = new Date(0).toISOString();
-    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log));
+    writeEntries(log);
     expect(verifyAuditIntegrity().valid).toBe(false);
   });
 
@@ -87,7 +87,7 @@ describe("audit chain — tamper detection", () => {
     for (let i = 0; i < 4; i++) logAudit(entry(i));
     const log = getAuditLog();
     log.splice(2, 1);
-    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log));
+    writeEntries(log);
     expect(verifyAuditIntegrity().valid).toBe(false);
   });
 
@@ -95,17 +95,23 @@ describe("audit chain — tamper detection", () => {
     for (let i = 0; i < 3; i++) logAudit(entry(i));
     const log = getAuditLog();
     [log[1], log[2]] = [log[2], log[1]];
-    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log));
+    writeEntries(log);
     expect(verifyAuditIntegrity().valid).toBe(false);
   });
 });
 
 // Retention rollover is normal; head deletion is not. The two look identical in
 // the array, so they are told apart by whether retention actually trimmed.
+/** Rewrite the store the way an attacker with devtools would: entries only. */
+const writeEntries = (entries: unknown[]) => {
+  const raw = JSON.parse(localStorage.getItem(AUDIT_STORAGE_KEY) || "{}");
+  localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify({ ...raw, entries }));
+};
+
+/** Rewrite the store the way real retention does: entries and boundary together. */
 const simulateRetentionTrim = (dropped: number) => {
   const kept = getAuditLog().slice(dropped);
-  localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(kept));
-  localStorage.setItem(`${AUDIT_STORAGE_KEY}_head`, kept[0].prevHash);
+  localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify({ head: kept[0].prevHash, entries: kept }));
   return kept;
 };
 
@@ -120,7 +126,7 @@ describe("audit chain — truncation is not tampering", () => {
     for (let i = 0; i < 5; i++) logAudit(entry(i));
     const kept = simulateRetentionTrim(2);
     kept[1].details = "tampered";
-    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(kept));
+    writeEntries(kept);
     expect(verifyAuditIntegrity().valid).toBe(false);
   });
 
@@ -128,7 +134,7 @@ describe("audit chain — truncation is not tampering", () => {
   // so an attacker could drop the genesis entry and have it read as benign.
   it("deleting the head without any retention trim is reported as tampering", () => {
     for (let i = 0; i < 5; i++) logAudit(entry(i));
-    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(getAuditLog().slice(1)));
+    writeEntries(getAuditLog().slice(1));
     expect(verifyAuditIntegrity()).toMatchObject({ valid: false, brokenAt: 0, truncated: false });
   });
 
@@ -141,7 +147,7 @@ describe("audit chain — truncation is not tampering", () => {
     expect(verifyAuditIntegrity()).toMatchObject({ valid: true, truncated: true });
 
     // attacker removes the current retained head
-    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(getAuditLog().slice(1)));
+    writeEntries(getAuditLog().slice(1));
     expect(verifyAuditIntegrity()).toMatchObject({ valid: false, brokenAt: 0 });
   });
 
@@ -156,7 +162,7 @@ describe("audit chain — truncation is not tampering", () => {
     for (let i = 0; i < 3; i++) logAudit(entry(i));
     const log = getAuditLog();
     log[0].prevHash = "f".repeat(64);
-    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log));
+    writeEntries(log);
     const r = verifyAuditIntegrity();
     expect(r.valid).toBe(false);
     expect(r.truncated).toBe(false);
@@ -168,7 +174,7 @@ describe("audit chain — malformed storage", () => {
     logAudit(entry(0));
     const log: unknown[] = getAuditLog();
     log.push(null);
-    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log));
+    writeEntries(log);
     expect(() => verifyAuditIntegrity()).not.toThrow();
     expect(verifyAuditIntegrity()).toMatchObject({ valid: false, brokenAt: 1 });
   });
@@ -177,7 +183,7 @@ describe("audit chain — malformed storage", () => {
     logAudit(entry(0));
     const log: unknown[] = getAuditLog();
     log.push({ id: "x", actor: "y" });
-    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log));
+    writeEntries(log);
     expect(verifyAuditIntegrity()).toMatchObject({ valid: false, brokenAt: 1 });
   });
 
@@ -190,13 +196,13 @@ describe("audit chain — malformed storage", () => {
       logAudit(entry(1));
       const log = getAuditLog() as unknown as Record<string, unknown>[];
       delete log[1][field];
-      localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log));
+      writeEntries(log);
       expect(verifyAuditIntegrity()).toMatchObject({ valid: false, brokenAt: 1 });
     },
   );
 
   it("survives a non-array payload", () => {
-    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify({ not: "an array" }));
+    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify({ not: "a log" }));
     expect(verifyAuditIntegrity()).toEqual({ valid: true, brokenAt: null, truncated: false });
   });
 });
@@ -242,7 +248,7 @@ describe("audit chain — truncation cannot be forged", () => {
     for (let i = 0; i < 3; i++) logAudit(entry(i));
     const log = getAuditLog();
     log[0].prevHash = "f".repeat(64);
-    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log));
+    writeEntries(log);
     expect(verifyAuditIntegrity()).toMatchObject({ valid: false, brokenAt: 0 });
   });
 
@@ -250,15 +256,41 @@ describe("audit chain — truncation cannot be forged", () => {
     for (let i = 0; i < 3; i++) logAudit(entry(i));
     const log = getAuditLog();
     log[0].prevHash = "0".repeat(63) + "1"; // near-genesis, one nibble off
-    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log));
+    writeEntries(log);
     expect(verifyAuditIntegrity().valid).toBe(false);
   });
 
   it("a genuine rollover with an intact head verifies as truncated", () => {
     for (let i = 0; i < 5; i++) logAudit(entry(i));
     const kept = getAuditLog().slice(2);
-    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(kept));
-    localStorage.setItem(`${AUDIT_STORAGE_KEY}_head`, kept[0].prevHash);
+    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify({ head: kept[0].prevHash, entries: kept }));
     expect(verifyAuditIntegrity()).toMatchObject({ valid: true, truncated: true });
+  });
+});
+
+describe("audit chain — storage is written atomically", () => {
+  // Raised in review: the boundary used to live in a sibling key, so a failed or
+  // interleaved second write left it disagreeing with the log and verification
+  // reported good entries as tampered.
+  it("entries and their boundary live in one value", () => {
+    for (let i = 0; i < 3; i++) logAudit(entry(i));
+    const raw = JSON.parse(localStorage.getItem(AUDIT_STORAGE_KEY)!);
+    expect(raw).toHaveProperty("head");
+    expect(raw).toHaveProperty("entries");
+    expect(raw.head).toBe(GENESIS_HASH);
+    expect(raw.entries).toHaveLength(3);
+  });
+
+  it("a rollover moves entries and boundary together, and still verifies", () => {
+    for (let i = 0; i < 5; i++) logAudit(entry(i));
+    const kept = simulateRetentionTrim(2);
+    const raw = JSON.parse(localStorage.getItem(AUDIT_STORAGE_KEY)!);
+    expect(raw.head).toBe(kept[0].prevHash);
+    expect(verifyAuditIntegrity()).toEqual({ valid: true, brokenAt: null, truncated: true });
+  });
+
+  it("no sibling boundary key is left behind", () => {
+    logAudit(entry(0));
+    expect(localStorage.getItem(`${AUDIT_STORAGE_KEY}_head`)).toBeNull();
   });
 });

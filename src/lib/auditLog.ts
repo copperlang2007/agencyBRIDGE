@@ -58,20 +58,30 @@ export interface AuditIntegrityResult {
 }
 
 /** Exported so tests and tooling do not have to hardcode the key. */
-export const AUDIT_STORAGE_KEY = "medicare_audit_log_v2";
+export const AUDIT_STORAGE_KEY = "medicare_audit_log_v3";
 
 /** Predecessor hash of the first entry in an untruncated chain. */
 export const GENESIS_HASH = "0".repeat(64);
 
 /**
- * The `prevHash` the current retained head is expected to carry.
+ * Stored shape: the entries and the boundary they were written with, in one
+ * value.
  *
- * A counter of dropped entries is not enough: once retention has trimmed even
- * once, any later head deletion looks like more of the same rollover. Recording
- * the boundary itself pins which entry the window is supposed to start at, so
- * removing the head no longer resembles housekeeping.
+ * The boundary is the `prevHash` the retained head is expected to carry. A
+ * counter of dropped entries is not enough — once retention has trimmed even
+ * once, any later head deletion looks like more of the same rollover — so the
+ * boundary itself pins where the window is supposed to start.
+ *
+ * It lives *inside* the payload rather than in a sibling key because two
+ * `setItem` calls are not atomic: if the second failed, or another tab
+ * interleaved between them, the boundary would disagree with the log and
+ * verification would report perfectly good entries as tampered. One key, one
+ * write, no window in which they can disagree.
  */
-const HEAD_BOUNDARY_KEY = `${AUDIT_STORAGE_KEY}_head`;
+interface StoredLog {
+  head: string;
+  entries: AuditEntry[];
+}
 
 const MAX_ENTRIES = 2000;
 const MAX_ENTRIES_UNDER_PRESSURE = 500;
@@ -106,8 +116,8 @@ if (typeof window !== "undefined" && !channel) {
   window.addEventListener("storage", (ev) => {
     if (ev.key === AUDIT_STORAGE_KEY && ev.newValue) {
       try {
-        const entries = JSON.parse(ev.newValue) as AuditEntry[];
-        const last = entries[entries.length - 1];
+        const { entries } = JSON.parse(ev.newValue) as StoredLog;
+        const last = Array.isArray(entries) ? entries[entries.length - 1] : undefined;
         if (last) emit(last);
       } catch {
         /* ignore malformed cross-tab payload */
@@ -155,21 +165,20 @@ function hashEntry(entry: AuditEntry): string {
 
 /** Read all audit entries from localStorage. */
 export function getAuditLog(): AuditEntry[] {
-  try {
-    const raw = localStorage.getItem(AUDIT_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as AuditEntry[]) : [];
-  } catch {
-    return [];
-  }
+  return readStored().entries;
 }
 
-function readHeadBoundary(): string {
+function readStored(): StoredLog {
   try {
-    return localStorage.getItem(HEAD_BOUNDARY_KEY) ?? GENESIS_HASH;
+    const raw = localStorage.getItem(AUDIT_STORAGE_KEY);
+    if (!raw) return { head: GENESIS_HASH, entries: [] };
+    const parsed = JSON.parse(raw) as Partial<StoredLog>;
+    return {
+      head: typeof parsed?.head === "string" ? parsed.head : GENESIS_HASH,
+      entries: Array.isArray(parsed?.entries) ? (parsed.entries as AuditEntry[]) : [],
+    };
   } catch {
-    return GENESIS_HASH;
+    return { head: GENESIS_HASH, entries: [] };
   }
 }
 
@@ -187,10 +196,12 @@ function isEntry(e: unknown): e is AuditEntry {
 }
 
 function write(kept: AuditEntry[]): void {
-  localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(kept));
-  // Written only after the log write succeeds, so the boundary can never claim a
-  // rollover that did not actually happen.
-  localStorage.setItem(HEAD_BOUNDARY_KEY, kept.length > 0 ? kept[0].prevHash : GENESIS_HASH);
+  const payload: StoredLog = {
+    head: kept.length > 0 ? kept[0].prevHash : GENESIS_HASH,
+    entries: kept,
+  };
+  // One write: the entries and the boundary they belong to can never diverge.
+  localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(payload));
 }
 
 function persist(log: AuditEntry[]): void {
@@ -268,7 +279,7 @@ export function logAudit(params: {
  * still verified.
  */
 export function verifyAuditIntegrity(): AuditIntegrityResult {
-  const log = getAuditLog();
+  const { head: expectedHeadPrev, entries: log } = readStored();
 
   for (let i = 0; i < log.length; i++) {
     const entry = log[i];
@@ -289,7 +300,6 @@ export function verifyAuditIntegrity(): AuditIntegrityResult {
   // alongside a failure. The head must sit exactly where retention last left it;
   // anything else means entries were removed from the front by something other
   // than the retention cap.
-  const expectedHeadPrev = readHeadBoundary();
   if (log.length > 0 && log[0].prevHash !== expectedHeadPrev) {
     return { valid: false, brokenAt: 0, truncated: false };
   }
@@ -334,7 +344,6 @@ export function clearAuditLog(
   const priorCount = getAuditLog().length;
   try {
     localStorage.removeItem(AUDIT_STORAGE_KEY);
-    localStorage.removeItem(HEAD_BOUNDARY_KEY);
   } catch {
     /* fall through — the re-seed below is what matters */
   }

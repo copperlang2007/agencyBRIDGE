@@ -26,12 +26,13 @@ completed:
   - REVIEW-001: PR #4 review round — CSV escaping centralised in src/lib/csv.ts; truncation-forgery concern tested and shown already covered
   - REVIEW-002: PR #4 review round 2 — 19 findings triaged; 12 real defects fixed with regression tests, 6 evidence/doc corrections, 1 recorded as R-010
   - REVIEW-003: PR #4 review round 3 — 9 findings on round 2's fixes; head-boundary gap in my own fix closed, all accepted
+  - REVIEW-004: PR #4 review round 4 — 4 findings on round 3's fixes; cent round-trip and atomic log+boundary storage (D-009)
 gates:
   contract: established
   ip_reuse: inspected-bounded          # 1 of 88 portfolio repos scanned with evidence; see IP-MAP
   architecture: documented
   implementation: hardened
-  tests: 130-pass-narrow-coverage      # 5 of 14 lib modules covered; zero component tests
+  tests: 137-pass-narrow-coverage      # 5 of 14 lib modules covered; zero component tests
   security: FAILED                     # R-001 client-side auth on a public deployment
   redteam: partial                     # lib logic reviewed; 26 page components not reviewed
   brand: package-delivered-motion-absent

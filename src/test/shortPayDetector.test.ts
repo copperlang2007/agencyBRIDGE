@@ -55,7 +55,59 @@ describe("parseCurrency", () => {
   it("rejects amounts too large for exact cent arithmetic", () => {
     expect(parseCurrency("1e308").valid).toBe(false); // not a currency literal anyway
     expect(parseCurrency("999999999999999999").valid).toBe(false);
-    expect(parseCurrency("90071992547409").valid).toBe(true); // just inside the safe range
+    expect(parseCurrency("1000000.00").valid).toBe(true);
+  });
+
+  // Raised in review: a magnitude bound alone is not enough. At the top of the
+  // safe-integer range Number("...409.90") and Number("...409.91") are the same
+  // double, so two amounts a cent apart parsed identically.
+  it("rejects amounts whose cents cannot survive the float conversion", () => {
+    // ...409.90 and ...409.91 are the same double, so at most one of them can be
+    // accepted — otherwise two amounts a cent apart would compare equal.
+    const a = parseCurrency("90071992547409.90");
+    const b = parseCurrency("90071992547409.91");
+    expect(a.valid && b.valid).toBe(false);
+
+    // Whichever survives must carry its exact cents.
+    for (const [raw, r] of [["90071992547409.90", a], ["90071992547409.91", b]] as const) {
+      if (!r.valid) continue;
+      const [w, f] = raw.split(".");
+      expect(Math.round(r.value * 100), raw).toBe(Number(`${w}${f}`));
+    }
+  });
+
+  it("no two accepted amounts a cent apart ever parse equal", () => {
+    for (const base of ["0", "9", "999", "1234567", "90071992547409"]) {
+      const a = parseCurrency(`${base}.00`);
+      const b = parseCurrency(`${base}.01`);
+      if (a.valid && b.valid) {
+        expect(a.value, `${base} pair`).not.toBe(b.value);
+        expect(Math.round(a.value * 100)).not.toBe(Math.round(b.value * 100));
+      }
+    }
+  });
+
+  it("every accepted amount round-trips to its exact cents", () => {
+    const samples = [
+      "0", "0.01", "0.99", "1", "1.005".slice(0, 4), "19.99", "450.00", "1234.56",
+      "999999.99", "1000000.00", "12345678.90", "1000000000.01",
+    ];
+    for (const s of samples) {
+      const r = parseCurrency(s);
+      if (!r.valid) continue;
+      const [w, f = ""] = s.replace(/,/g, "").split(".");
+      const expected = Number(`${w || "0"}${f.slice(0, 2).padEnd(2, "0")}`);
+      expect(Math.round(r.value * 100), s).toBe(expected);
+    }
+  });
+
+  it("keeps a one-cent difference detectable at every accepted magnitude", () => {
+    for (const base of ["1", "999", "19999", "1234567", "1000000000"]) {
+      const a = parseCurrency(`${base}.00`);
+      const b = parseCurrency(`${base}.01`);
+      expect(a.valid && b.valid, base).toBe(true);
+      expect(classifyVariance(b.value, a.value), base).toBe("short_pay");
+    }
   });
 
   it("G2: unparseable input is reported invalid rather than silently zeroed", () => {

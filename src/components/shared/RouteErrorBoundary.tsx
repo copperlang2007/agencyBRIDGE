@@ -47,8 +47,11 @@ class RouteErrorBoundaryInner extends Component<
 
   componentDidUpdate(prev: { routeKey: string }) {
     // routeKey is the concrete pathname, so moving between two records of the
-    // same parameterised route clears a stale error too.
-    if (prev.routeKey !== this.props.routeKey && this.state.error) {
+    // same parameterised route resets too. The retry count is cleared on every
+    // navigation, not only while an error is showing: a count left over from a
+    // recovered route would make the *first* failure on the next route look like
+    // a post-retry stale deployment and push Reload as the primary action.
+    if (prev.routeKey !== this.props.routeKey && (this.state.error || this.state.attempt > 0)) {
       this.setState({ error: null, attempt: 0 });
     }
   }

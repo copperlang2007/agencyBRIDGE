@@ -51,3 +51,9 @@ Immutable IDs. Never silently rewrite a decision; supersede it with a new one.
 **Status:** accepted
 **Decision:** The CMS-benchmark payout inference in `copperlang2007/commission-engine` (`PayoutDetective`) is **ADAPT — deferred**, not reused now.
 **Rationale:** See `IP-MAP.yaml` IP-001. It is materially stronger domain logic than agencyBRIDGE's classifier, but it is Python/FastAPI and requires a `Policy` record with CMS FMV rates and an effective date. agencyBRIDGE's public tool has no rate table and no server — it asks the agent to type the expected amount precisely because of that. Porting it requires infrastructure that does not exist in this repo yet.
+
+## D-009
+**Status:** accepted
+**Decision:** The audit store moves from a bare entry array under `medicare_audit_log_v2` to a single object under `medicare_audit_log_v3`: `{ head, entries }`.
+**Rationale:** The retained-head boundary and the entries it describes must never disagree. Held in a sibling key they were two non-atomic `setItem` calls — a failed second write or an interleaving tab left the boundary describing a head the log no longer had, and verification reported good entries as tampered. One key and one write removes the window entirely.
+**Consequence:** v2 logs in an existing browser profile are not migrated, for the same reason as D-004 — a different stored shape would fail verification and raise a false alarm. Acceptable while the log is demo-local; revisit with R-003.

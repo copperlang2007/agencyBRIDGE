@@ -49,8 +49,19 @@ export function toCents(amount: number): number {
   return Math.round(amount * 100);
 }
 
-/** Largest amount whose cent value still fits exactly in a JS number. */
-const MAX_SAFE_AMOUNT = Number.MAX_SAFE_INTEGER / 100;
+/**
+ * A parsed amount is only accepted when its float representation round-trips to
+ * the exact cent value written in the string.
+ *
+ * A magnitude bound alone is not enough: at the top of the safe-integer range
+ * `Number("90071992547409.90")` and `Number("90071992547409.91")` are the *same*
+ * double, so two amounts a cent apart would compare equal. Checking the
+ * round-trip rejects any value whose cents cannot survive the conversion,
+ * wherever that boundary happens to fall.
+ */
+function centsRoundTrip(cents: number, value: number): boolean {
+  return Number.isSafeInteger(cents) && toCents(value) === cents;
+}
 
 /**
  * Parse a currency string entered by a human.
@@ -78,11 +89,15 @@ export function parseCurrency(raw: string): { value: number; valid: boolean } {
   const decimals = m[3] ?? "";
   if (decimals.length > 2 && /[^0]/.test(decimals.slice(2))) return { value: 0, valid: false };
 
-  const magnitude = Number(m[2].replace(/,/g, ""));
+  const digits = m[2].replace(/,/g, "");
+  const magnitude = Number(digits);
   if (!Number.isFinite(magnitude)) return { value: 0, valid: false };
-  // Beyond this, amount * 100 loses integer precision and equal values can compare
-  // unequal — an amount that large is a typo in a commission field regardless.
-  if (magnitude > MAX_SAFE_AMOUNT) return { value: 0, valid: false };
+
+  // Cents come from the digits themselves, not from the float, so the intended
+  // value is known exactly before any rounding happens.
+  const [whole, frac = ""] = digits.split(".");
+  const exactCents = Number(`${whole || "0"}${frac.slice(0, 2).padEnd(2, "0")}`);
+  if (!centsRoundTrip(exactCents, magnitude)) return { value: 0, valid: false };
 
   const negative = m[1] === "-" || Boolean(parenthesised);
   return { value: negative ? -magnitude : magnitude, valid: true };
