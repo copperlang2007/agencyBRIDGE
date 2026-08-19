@@ -8,7 +8,13 @@
  * so entries are hashed where the client cannot reach them.
  */
 
-import { sha256Hex } from "./sha256";
+// The ".js" extension is required, not stylistic: this module is imported by
+// the serverless functions, which run as real Node ESM where an extensionless
+// relative specifier does not resolve. Without it the API builds cleanly and
+// then every function that reaches the audit chain dies at import with
+// FUNCTION_INVOCATION_FAILED — a production-only failure that the bundler used
+// in dev and in tests papers over. Vite and tsc map ".js" back to ".ts".
+import { sha256Hex } from "./sha256.js";
 
 /**
  * The audit vocabulary.

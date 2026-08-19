@@ -145,7 +145,7 @@ export default function LoginPage() {
               <Button
                 type="submit"
                 className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-semibold shadow-lg shadow-blue-500/20"
-                disabled={loading || !email || !password}
+                disabled={loading || demoLoading || !email || !password}
               >
                 {loading ? (
                   <>
@@ -210,7 +210,10 @@ export default function LoginPage() {
                 type="button"
                 variant="outline"
                 className="w-full mt-3"
-                disabled={!acknowledged || demoLoading}
+                // Also disabled while a credential sign-in is in flight: two
+                // concurrent requests both set the same session state, and
+                // whichever answered last would decide who you are signed in as.
+                disabled={!acknowledged || demoLoading || loading}
                 onClick={handleDemo}
               >
                 {demoLoading ? (

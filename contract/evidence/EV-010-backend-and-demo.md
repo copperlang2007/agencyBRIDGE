@@ -7,6 +7,11 @@ host and the app in Chromium at 1440×900, both talking to the real Neon
 database (`falling-dream-48302930`, Postgres 18.4). No result here is inferred
 from reading the code.
 
+The screenshots cited are committed alongside this file under `screens/`, so a
+reader can check the claims rather than take them. They are WebP at 72% scale —
+legible, and a fraction of the 6 MB the originals would have added to the
+repository.
+
 ---
 
 ## 1. What was actually wrong
@@ -79,7 +84,7 @@ Measured through the API, demo tenant:
 | Administrator | 48 | 38 | 12 | 7 |
 | Agent (Daniel Reyes, AG-001) | 10 | 8 | 6 | 1 |
 
-And in the product, not just the API — `05-clients-as-agent.png`: the header
+And in the product, not just the API — `screens/05-clients-as-agent.webp`: the header
 badge reads **Viewing: My Book**, the counts are 6 Active / 2 Pending / 2
 Prospects / 0 Lapsed, every row's Agent column is *Daniel Reyes*, and
 Reconciliation and Supervisor have disappeared from the navigation.
@@ -111,8 +116,8 @@ checked beforehand, so there is no window between the check and the write.
 | Demo accounts via `/api/auth/login` | impossible — they carry no password hash |
 
 The "Enter demo" button is disabled until the acknowledgement is ticked
-(`01-login.png`), and every page carries the banner *"Demo — Sample agency,
-invented data. Changes are disabled."* (`03-clients-admin.png`).
+(`screens/01-login.webp`), and every page carries the banner *"Demo — Sample agency,
+invented data. Changes are disabled."* (`screens/03-clients-admin.webp`).
 
 The onboarding wizard is skipped for demo sessions. It was not, at first: the
 first run of this journey landed on *"Welcome to agencyBRIDGE — Step 1 of 6"*
@@ -146,8 +151,8 @@ it trimmed to — noted as R-011.)
 
 And through the UI: after rewriting the demo tenant's entry 1 in Postgres, the
 Security page's Chain Integrity tile read **Broken — Broken at #1**
-(`06-security-tampered.png`). Restored, it reads **Verified — No tampering
-detected** (`04-security.png`).
+(`screens/06-security-tampered.webp`). Restored, it reads **Verified — No tampering
+detected** (`screens/04-security.webp`).
 
 **Actor spoofing.** A client posting `{"actor":"Somebody Else","actorId":"impostor"}`
 had it ignored; the entry recorded `QA Admin` with the session's own user id.
@@ -184,7 +189,7 @@ Both were caught by driving the real app rather than by reading the diff.
 **Signing in landed on a 404.** Authenticating does not change the URL, so a
 session that began at `/login` fell through the authenticated router — which has
 no `/login` route — to the catch-all. The first thing a new user saw after a
-successful sign-in was *"404 — Oops! Page not found"* (`02-dashboard-admin.png`,
+successful sign-in was *"404 — Oops! Page not found"* (`screens/02-dashboard-admin.webp`,
 before the fix). The condition pre-dates this pass; it was hidden because the
 onboarding wizard rendered outside the router and covered it. Skipping onboarding
 for demo visitors exposed it to every one of them. `/login` now redirects to the

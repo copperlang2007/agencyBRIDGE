@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   actionPermissions,
   getImpersonatableRoles,
@@ -73,6 +74,23 @@ describe("table integrity", () => {
         expect(isRoleId(role), `${route} lists "${role}"`).toBe(true);
       }
     }
+  });
+
+  it("every route the app defines is in the table", () => {
+    // Route lookup fails closed, so a page missing from this table is denied to
+    // everyone — a whole feature disappears, and nothing else says why. This
+    // reads the route list out of App.tsx so adding a page without a permission
+    // entry fails here rather than in someone's browser.
+    // Path from the project root: vitest runs there, and import.meta.url is
+    // not a file: URL under the jsdom environment.
+    const app = readFileSync("src/App.tsx", "utf8");
+    const routes = [...app.matchAll(/\{ path: "([^"]+)"/g)]
+      .map((m) => m[1])
+      .filter((p) => p !== "*");
+
+    expect(routes.length).toBeGreaterThan(20);
+    const missing = routes.filter((r) => !(r in routePermissions));
+    expect(missing, `routes with no permission entry: ${missing.join(", ")}`).toEqual([]);
   });
 
   it("the dashboard is reachable by every role", () => {

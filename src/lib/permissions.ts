@@ -117,6 +117,10 @@ export const routePermissions: Record<string, RoleId[]> = {
   "/reporting": ["admin", "supervisor", "retention"],
   "/compliance-center": ["admin", "supervisor", "readonly"],
   "/agents": ["admin", "supervisor"],
+  // The detail view is a distinct route, and RoleGuard looks up the exact path.
+  // Missing it denied the page to everyone once route lookup began failing
+  // closed — the safe direction, but still a page nobody could open.
+  "/agents/:agentId": ["admin", "supervisor"],
   "/backoffice": ["admin", "agent", "supervisor"],
   "/admin": ["admin"],
   "/retention": ["admin", "supervisor", "retention"],

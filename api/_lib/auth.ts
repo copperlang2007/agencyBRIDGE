@@ -66,13 +66,21 @@ export function requireSameOrigin(req: VercelRequest): void {
   const hostname = Array.isArray(host) ? host[0] : host;
   if (!hostname) return;
 
-  let originHost: string;
+  let parsed: URL;
   try {
-    originHost = new URL(origin).host;
+    parsed = new URL(origin);
   } catch {
     throw forbidden("Request origin is not valid.");
   }
-  if (originHost !== hostname) {
+
+  // Scheme as well as host: comparing hosts alone accepts http://example.com
+  // against an https://example.com deployment, which is exactly the downgrade
+  // an attacker on the network would arrange.
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  const proto = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto;
+  const expectedScheme = proto ?? (process.env.NODE_ENV === "development" ? "http" : "https");
+
+  if (parsed.host !== hostname || parsed.protocol !== `${expectedScheme}:`) {
     throw forbidden("Cross-site requests are not accepted.");
   }
 }

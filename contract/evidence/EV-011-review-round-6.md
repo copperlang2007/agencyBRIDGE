@@ -73,7 +73,7 @@ three states rather than two:
 | no answer | **Unavailable** | the error, plus a banner saying integrity is *unknown* — "this is not a statement that the chain is intact" |
 
 Verified in the browser by intercepting `/api/audit/verify` with a 503
-(`07-security-unavailable.png`): the tile reads **Unavailable — This deployment
+(`screens/07-security-unavailable.webp`): the tile reads **Unavailable — This deployment
 has no database configured**, and `Chain Integrity\nVerified` does not appear.
 
 ## P2 — the audit vocabulary was defined twice
@@ -124,3 +124,93 @@ npm run build       clean
 Tests added: `auditTransport` (9). The audit-duplication defect would have been
 caught by a transport test at any point; there was none, which LlamaPReview also
 noted as P2. There is one now.
+
+---
+
+# Second round — cubic (31 findings) and a production-only crash
+
+## The deployed API was crashing at import
+
+Found by exercising the Vercel preview rather than by review. `/api/auth/me` and
+`/api/book/clients` answered correctly, but `/api/auth/demo` returned
+`FUNCTION_INVOCATION_FAILED` — **including on its acknowledgement check, which
+runs before any database call**. A handler failing before its first line means
+the module never loaded.
+
+The cause: `src/lib/auditChain.ts` imported `./sha256` with no extension. That is
+correct for a bundler and wrong for Node ESM, which is what Vercel runs. Every
+function reaching the audit chain — demo, login, logout, audit, client-update —
+died on import. `me.ts` survived only because nothing it imports touches the
+chain.
+
+Nothing local catches this: the dev host bundles with esbuild and vitest resolves
+through Vite, and both are happy with extensionless specifiers. It is visible
+only on the platform. The specifier is now `./sha256.js`, with a comment saying
+why it is not stylistic.
+
+**This is the strongest argument in this evidence file for deploying before
+declaring done.** Local typecheck, 141 tests, a production build and a full
+browser journey against that build all passed while the deployed API was dead.
+
+## P1s accepted and fixed
+
+| Finding | Why it was real |
+|---|---|
+| **Audit entries named the impersonated user** | An administrator acting as an agent produced entries attributed to the agent. The trail hid the only person who could be held to the action, while looking perfectly well-formed. Actor is now the account holder; the effective identity moves to the details as `(acting as …)`. |
+| **Deleting the newest entries verified clean** | Verification walked the surviving rows, so a truncated chain was still internally consistent — and an emptied one verified vacuously. A head marker (`audit_heads`) is now written after each append and compared during verification. |
+| **Impersonation survived a role change** | The stored pointer was trusted on every request. If the impersonated account was later promoted, the session resolved as the *new* role — escalation arriving without anyone doing anything suspicious. Permission is now re-checked on every lookup, and failing it drops the impersonation rather than the session. |
+| **Retention could read every producer's pay** | `agent:view_payments` is admin and supervisor only, but the endpoint returned the `payments` array to anyone who could list agents. Scoping decides which *rows* are visible and says nothing about columns. |
+| **`/agents/:agentId` was denied to everyone** | A regression from making route lookup fail closed: the detail route was absent from the table. Fixed, and a test now reads the route list out of `App.tsx` so a page added without a permission entry fails there rather than in someone's browser. |
+| **Hooks presented a failed fetch as an empty book** | "Could not load" and "you have no clients" are different facts that looked identical, and a revoked session kept rendering cached rows. |
+| **Seed could convert the demo tenant to a real one** | `SEED_TENANT_SLUG=demo` would strip the read-only gate from a tenant full of invented clients. `is_demo` is no longer updatable and the slug is reserved. |
+| **Seed could move an account between tenants** | Email is unique table-wide, so an unqualified upsert handed somebody else's account — password intact — to whichever tenant seeded that address last. |
+| **Seed could leave a password on a demo account** | `coalesce` preserved an existing hash, which would have made a demo account reachable from `/api/auth/login`. Demo accounts are now set to null outright. |
+| **A direct Neon endpoint was only warned about** | A warning nobody reads is not a control. Refused in production. |
+
+Verified end to end after the fixes:
+
+```
+retention agents:  5 agents, payment rows total: 0     (admin: 7 agents, 15 rows)
+audit while impersonating:
+  TEST_WHILE_IMPERSONATING  actor=Patricia Chen | acted (acting as Daniel Reyes, agent)
+tail deletion:     "The chain ends at entry 82, but entry 84 was recorded."
+total deletion:    "The chain is empty, but 84 entries were recorded."
+```
+
+## P2s accepted and fixed
+
+Logout clears the cookie before any database call, so a failed revoke cannot
+restore the session on refresh. Same-origin checking compares scheme as well as
+host. `audit_events` uses `on delete restrict`, so removing a tenant is no longer
+a route to erasing its trail. The demo button is disabled while a credential
+sign-in is in flight. The exported setup block runs `db:extract` before
+`db:seed`. `SEED_ADMIN_EMAIL` is trimmed.
+
+**Screenshots are committed** under `screens/`. cubic was right that citing
+images absent from the repository is not reproducible evidence.
+
+## Disputed
+
+**"Adding `api` to tsconfig breaks typecheck without Node types."** It does not.
+`npm run typecheck` passes, and the coverage was confirmed by planting a
+deliberate type error in `api/` and watching it fail. Recorded here because the
+claim is specific and checkable, and checking it is cheaper than assuming either
+way.
+
+## Accepted as open risks, not fixed here
+
+- **Any authenticated user can submit arbitrary audit semantics** (`POST /api/audit`).
+  True, and inherent to a client transport: the UI logs what the UI did. It is
+  bounded — actor, session and IP come from the session, category and severity
+  are validated, and entries are additive — so the trail can be padded but not
+  falsified as to who acted. Emitting every event server-side from the operation
+  handlers is the real answer and is a larger change than this pass. **R-014.**
+- **Batch appends are not one transaction**, so a lost response can duplicate
+  entries on retry. Needs client-generated idempotency keys. **R-015.**
+- **A write and its audit entry are not atomic** in `client-update`. **R-016.**
+- **Login throttling has a check-then-act race** under concurrency. **R-017.**
+- **Verification rehashes the whole chain** on every call, which will not hold at
+  length. **R-011**, already recorded.
+- **Demo audit entries carry visitor IP and user agent**, readable by any demo
+  visitor with the auditor role. **R-018.**
+- **CSV export covers only the 500 loaded rows.** **R-019.**

@@ -8,6 +8,30 @@ import {
   type ChainRecord,
 } from "../../src/lib/auditChain.js";
 
+/**
+ * Who an entry is attributed to.
+ *
+ * The account holder, never the identity they are presenting as. An
+ * administrator viewing the product as an agent is still the person who acted,
+ * and an audit trail that names the impersonated user hides the only party who
+ * can be held to it — while looking perfectly well-formed. The effective
+ * identity is not lost: it is appended to the details, where it belongs as
+ * context rather than as the actor.
+ */
+export function actorFor(session: {
+  realName: string;
+  realUserId: string;
+  name: string;
+  role: string;
+  isImpersonating: boolean;
+}): { actor: string; actorId: string; suffix: string } {
+  return {
+    actor: session.realName,
+    actorId: session.realUserId,
+    suffix: session.isImpersonating ? ` (acting as ${session.name}, ${session.role})` : "",
+  };
+}
+
 export interface AuditInput {
   actor: string;
   actorId: string;
@@ -87,6 +111,16 @@ export async function appendAudit(
           record.ipAddress, record.userAgent, prevHash, hash,
         ],
       );
+      // Record where the chain has reached. Written after the row, and only
+      // ever forward, so a lost race cannot rewind the marker.
+      await query(
+        `insert into audit_heads (tenant_id, seq, hash, updated_at)
+         values ($1, $2, $3, now())
+         on conflict (tenant_id) do update
+           set seq = excluded.seq, hash = excluded.hash, updated_at = now()
+         where excluded.seq > audit_heads.seq`,
+        [tenantId, seq, hash],
+      );
       return { seq, hash };
     } catch (err) {
       lastError = err;
@@ -158,14 +192,22 @@ export async function listAudit(tenantId: string, limit: number): Promise<AuditR
  *
  * Reads oldest-first so the walk matches the order the entries were written.
  *
- * The chain must start at seq 1. Nothing in this system removes an audit row —
- * there is no retention trim — so a first entry above 1 means rows were deleted
- * outright, which is tampering and is reported as such. Taking the head's own
- * `prevHash` as the expected boundary instead would make front-deletion verify
- * clean, which is precisely the hole a deleter would use. If a retention window
- * is ever added it must record the boundary hash it trimmed to, and that
- * recorded value — never the surviving head's own claim — becomes the expected
- * predecessor here.
+ * Three things are checked, because a walk of the surviving rows alone proves
+ * only that what remains is self-consistent:
+ *
+ *  - the chain starts at seq 1. Nothing here removes a row — there is no
+ *    retention trim — so a higher first entry means rows were deleted from the
+ *    front. Taking the surviving head's own `prevHash` as the expected boundary
+ *    would make that verify clean, which is precisely the hole a deleter uses.
+ *  - every entry re-derives to its stored hash and links to its predecessor.
+ *  - the last entry matches the recorded head. Without this, deleting the
+ *    *newest* rows leaves a shorter chain that still verifies perfectly, and
+ *    deleting every row leaves an empty one that verifies vacuously. The marker
+ *    is kept outside the walk for exactly that reason.
+ *
+ * If a retention window is ever added it must record the boundary hash it
+ * trimmed to, and that recorded value — never a surviving row's own claim —
+ * becomes the expected predecessor.
  */
 export async function verifyAudit(tenantId: string): Promise<ChainIntegrityResult & { count: number }> {
   const rows = await query<Record<string, unknown>>(
@@ -173,7 +215,22 @@ export async function verifyAudit(tenantId: string): Promise<ChainIntegrityResul
     [tenantId],
   );
   const entries = rows.map(toRecord);
+
+  const marker = await queryOne<{ seq: string; hash: string }>(
+    `select seq, hash from audit_heads where tenant_id = $1`,
+    [tenantId],
+  );
+
   if (entries.length === 0) {
+    if (marker) {
+      return {
+        valid: false,
+        brokenAt: 1,
+        truncated: true,
+        reason: `The chain is empty, but ${marker.seq} entries were recorded. Every entry has been deleted.`,
+        count: 0,
+      };
+    }
     return { valid: true, brokenAt: null, truncated: false, count: 0 };
   }
   const firstSeq = Number(entries[0].seq);
@@ -187,5 +244,18 @@ export async function verifyAudit(tenantId: string): Promise<ChainIntegrityResul
     };
   }
   const result = verifyChain(entries, GENESIS_HASH);
+  if (!result.valid) return { ...result, count: entries.length };
+
+  const last = entries[entries.length - 1];
+  if (marker && (Number(last.seq) !== Number(marker.seq) || last.hash !== marker.hash)) {
+    return {
+      valid: false,
+      brokenAt: Number(marker.seq),
+      truncated: true,
+      reason: `The chain ends at entry ${last.seq}, but entry ${marker.seq} was recorded. Later entries have been removed.`,
+      count: entries.length,
+    };
+  }
+
   return { ...result, count: entries.length };
 }

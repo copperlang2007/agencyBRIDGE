@@ -9,7 +9,7 @@ import {
   withErrors,
 } from "../_lib/http.js";
 import { requireAction, requireSameOrigin, requireUser } from "../_lib/auth.js";
-import { appendAudit, listAudit } from "../_lib/audit.js";
+import { actorFor, appendAudit, listAudit } from "../_lib/audit.js";
 import { isAuditCategory, isAuditSeverity } from "../../src/lib/auditChain.js";
 
 /** Ceiling on one page of entries, and on one batch of appends. */
@@ -48,6 +48,7 @@ export default withErrors(async (req: VercelRequest, res: VercelResponse) => {
 
   const ip = clientIp(req);
   const ua = userAgent(req);
+  const who = actorFor(session);
   const written: number[] = [];
 
   for (const item of items) {
@@ -66,14 +67,14 @@ export default withErrors(async (req: VercelRequest, res: VercelResponse) => {
     written.push(
       (
         await appendAudit(session.tenantId, {
-          actor: session.name,
-          actorId: session.userId,
+          actor: who.actor,
+          actorId: who.actorId,
           action: str(e.action, "UNKNOWN"),
           category,
           entity: str(e.entity, "unknown"),
           entityId: str(e.entityId, "-"),
           severity,
-          details: str(e.details),
+          details: str(e.details) + who.suffix,
           sessionId: session.sessionId,
           ipAddress: ip,
           userAgent: ua,

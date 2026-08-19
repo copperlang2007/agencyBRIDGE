@@ -1,7 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { query, queryOne } from "./db.js";
-import type { RoleId } from "../../src/lib/permissions.js";
+import { getImpersonatableRoles, type RoleId } from "../../src/lib/permissions.js";
 
 export const SESSION_COOKIE = "ab_session";
 export const SESSION_TTL_MS = 8 * 60 * 60 * 1000; // 8 hours
@@ -168,7 +168,17 @@ export async function currentSession(req: VercelRequest): Promise<SessionUser | 
   const b = Buffer.from(expected, "utf8");
   if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
 
-  const impersonating = row.imp_user_id !== null && row.imp_role !== null;
+  // Re-checked on every request, not just when impersonation was granted.
+  // Roles change: the agent an administrator selected last week may have been
+  // promoted since. Trusting the stored pointer alone would let a supervisor
+  // who picked an agent resolve as that account's new supervisor or admin role
+  // — an escalation that arrives without anyone doing anything suspicious.
+  // Failing closed here drops the impersonation and leaves the caller as
+  // themselves, rather than denying the session outright.
+  const impersonating =
+    row.imp_user_id !== null &&
+    row.imp_role !== null &&
+    getImpersonatableRoles(row.role).includes(row.imp_role);
 
   return {
     userId: impersonating ? row.imp_user_id! : row.user_id,

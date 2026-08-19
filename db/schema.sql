@@ -178,9 +178,12 @@ create index if not exists appointments_agent_idx on appointments (tenant_id, ag
 -- deleted row leaves a gap that verification reports — a chain stored in a
 -- table the writer cannot rewrite is the point of moving this off the client.
 
+-- `on delete restrict`, unlike every other table here: deleting a tenant must
+-- not be a way to erase its audit history. A tenant carrying audit records
+-- cannot be dropped until somebody deals with the trail deliberately.
 create table if not exists audit_events (
   id          uuid primary key default gen_random_uuid(),
-  tenant_id   uuid not null references tenants(id) on delete cascade,
+  tenant_id   uuid not null references tenants(id) on delete restrict,
   seq         bigint not null,
   ts          timestamptz not null default now(),
   actor       text not null,
@@ -200,3 +203,17 @@ create table if not exists audit_events (
 );
 
 create index if not exists audit_tenant_seq_idx on audit_events (tenant_id, seq desc);
+
+-- The head each tenant's chain is known to have reached.
+--
+-- Verification walks the stored rows, so on its own it can only prove that what
+-- remains is internally consistent: delete the newest entries and the surviving
+-- prefix still verifies, and delete every row and there is nothing left to
+-- disagree with. This records, outside that walk, where the chain got to. It is
+-- written after a successful append and only ever moves forward.
+create table if not exists audit_heads (
+  tenant_id   uuid primary key references tenants(id) on delete cascade,
+  seq         bigint not null,
+  hash        char(64) not null,
+  updated_at  timestamptz not null default now()
+);

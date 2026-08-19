@@ -13,7 +13,7 @@ import {
 } from "../_lib/http.js";
 import { requireAction, requireSameOrigin, requireWritable } from "../_lib/auth.js";
 import { bookScope } from "../_lib/scope.js";
-import { appendAudit } from "../_lib/audit.js";
+import { actorFor, appendAudit } from "../_lib/audit.js";
 
 /**
  * Updates a client's status and notes.
@@ -77,18 +77,19 @@ export default withErrors(async (req: VercelRequest, res: VercelResponse) => {
   if (updated.length === 0) throw notFound("No such client in your book.");
   const row = updated[0];
 
+  const who = actorFor(session);
   await appendAudit(session.tenantId, {
-    actor: session.name,
-    actorId: session.userId,
+    actor: who.actor,
+    actorId: who.actorId,
     action: "CLIENT_UPDATED",
     category: "client",
     entity: "client",
     entityId: row.id,
     severity: "info",
-    details: [
+    details: ([
       hasStatus ? `status set to ${row.status}` : null,
       hasNotes ? "notes edited" : null,
-    ].filter(Boolean).join("; ") || "no change",
+    ].filter(Boolean).join("; ") || "no change") + who.suffix,
     sessionId: session.sessionId,
     ipAddress: clientIp(req),
     userAgent: userAgent(req),

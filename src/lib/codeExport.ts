@@ -56,6 +56,9 @@ export async function exportCodeAsZip(): Promise<number> {
       "npm install",
       "export DATABASE_URL='postgresql://...-pooler.../neondb?sslmode=require'",
       "npm run db:migrate",
+      // Ahead of the seed, not explained after it: seed-data.json is generated
+      // and is excluded from this zip, and db:seed exits without it.
+      "npm run db:extract   # regenerates db/seed-data.json",
       "npm run db:seed",
       "npm run dev:api   # /api functions",
       "npm run dev       # app on :8080",
@@ -64,8 +67,8 @@ export async function exportCodeAsZip(): Promise<number> {
       "The app needs a Postgres database: authentication, the book of business",
       "and the audit trail are server-side. See README.md for details.",
       "",
-      "db/seed-data.json is not included — it is generated. Recreate it with",
-      "`npm run db:extract` before seeding.",
+      "db/seed-data.json is generated, so it is not in this archive;",
+      "`npm run db:extract` above recreates it from src/lib/mockData.ts.",
       "",
       "## Stack",
       "",

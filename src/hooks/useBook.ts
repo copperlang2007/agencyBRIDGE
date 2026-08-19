@@ -42,6 +42,9 @@ function useBookQuery<T>(
     // would only ever come back 401.
     enabled: !!user,
     staleTime: 30_000,
+    // Do not keep serving rows a failed request could not confirm the caller is
+    // still entitled to.
+    gcTime: 60_000,
     // A 401 or 403 will not become a 200 by asking again.
     retry: (count, error) => {
       const status = (error as { status?: number }).status ?? 0;
@@ -58,10 +61,37 @@ export const useAgentsQuery = () => useBookQuery<AgentRecord>("agents", api.agen
 
 const EMPTY: never[] = [];
 
-export const useClients = (): ClientRecord[] => useClientsQuery().data ?? EMPTY;
-export const usePolicies = (): PolicyRecord[] => usePoliciesQuery().data ?? EMPTY;
-export const useAppointments = (): AppointmentRecord[] => useAppointmentsQuery().data ?? EMPTY;
-export const useAgents = (): AgentRecord[] => useAgentsQuery().data ?? EMPTY;
+/**
+ * Returns the rows, and nothing at all when the request failed.
+ *
+ * A failed fetch must not read as "this book is empty". Those are different
+ * facts and they look identical on screen — an agent whose session was revoked
+ * would see a clean, plausible "no clients" rather than being told to sign in.
+ * Cached rows are dropped on an authentication or authorization failure for the
+ * same reason: a revoked session must stop rendering the rows it used to be
+ * allowed to see.
+ */
+function rowsOf<T>(query: UseQueryResult<T[]>): T[] {
+  if (query.isError) return EMPTY;
+  return query.data ?? EMPTY;
+}
+
+export const useClients = (): ClientRecord[] => rowsOf(useClientsQuery());
+export const usePolicies = (): PolicyRecord[] => rowsOf(usePoliciesQuery());
+export const useAppointments = (): AppointmentRecord[] => rowsOf(useAppointmentsQuery());
+export const useAgents = (): AgentRecord[] => rowsOf(useAgentsQuery());
+
+/**
+ * The error behind an empty book, if there is one. Pages use it to say "could
+ * not load" instead of "nothing here".
+ */
+export function useBookError(): string | null {
+  const queries = [useClientsQuery(), usePoliciesQuery(), useAppointmentsQuery(), useAgentsQuery()];
+  const failed = queries.find((q) => q.isError);
+  if (!failed) return null;
+  const err = failed.error as { message?: string } | undefined;
+  return err?.message ?? "Could not load your book of business.";
+}
 
 /** Invalidates every cached slice of the current user's book after a write. */
 export function useInvalidateBook(): () => void {

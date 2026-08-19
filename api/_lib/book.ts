@@ -1,6 +1,7 @@
 import { query } from "./db.js";
 import { agentScope, bookScope } from "./scope.js";
 import type { SessionUser } from "./session.js";
+import { roleCan } from "../../src/lib/permissions.js";
 
 /**
  * Book-of-business reads.
@@ -180,6 +181,12 @@ export async function listAppointments(session: SessionUser): Promise<Appointmen
 
 export async function listAgents(session: SessionUser): Promise<AgentDTO[]> {
   const scope = agentScope(session);
+  // A retention specialist may read the producer roster but not what producers
+  // are paid — `agent:view_payments` is admin and supervisor only. Scoping
+  // decides which *rows* are visible; it says nothing about which columns, so
+  // without this the endpoint hands every producer's payment history to a role
+  // the permission table denies it to.
+  const maySeePayments = roleCan(session.role, "agent:view_payments");
   const rows = await query<Record<string, unknown>>(
     `select id, name, role, email, phone, status, contracted, hire_date,
             book_size, ytd_commissions, compliance_score, ahip, ahip_expiry,
@@ -217,6 +224,6 @@ export async function listAgents(session: SessionUser): Promise<AgentDTO[]> {
     w9OnFile: Boolean(r.w9_on_file),
     taxInfoComplete: Boolean(r.tax_info_complete),
     tasks: Array.isArray(r.tasks) ? r.tasks : [],
-    payments: Array.isArray(r.payments) ? r.payments : [],
+    payments: maySeePayments && Array.isArray(r.payments) ? r.payments : [],
   }));
 }
