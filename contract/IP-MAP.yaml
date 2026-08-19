@@ -1,0 +1,70 @@
+project: agencybridge
+scan_status: bounded-with-evidence
+scan_note: >-
+  IP-FIRST requires searching the complete owned portfolio. The registry lists 88
+  repositories; this session had read access to agencyBRIDGE plus repositories it
+  attached explicitly. One targeted scan was performed against the single highest-
+  signal candidate for the capability actually touched (commission short-pay
+  logic). The remaining portfolio is UNSCANNED and this is a known gap, not a
+  claim of coverage.
+rules:
+  - inspect owned IP before building new capability
+  - record exact repository and path for reusable assets
+  - justify every deliberate rebuild
+scanned:
+  - repository: copperlang2007/commission-engine
+    commit: 114ca5d
+    method: shallow clone; grep for short-pay/variance/reconciliation/chargeback and sha256/audit-chain; read matching sources
+unscanned_candidates:
+  - copperlang2007/insurancecommtracker
+  - copperlang2007/stevecommission
+  - copperlang2007/insureitall-os
+  - copperlang2007/bridge-os
+  - copperlang2007/thebridge-suite
+assets:
+  - id: IP-001
+    capability: Commission variance classification / short-pay detection
+    found_at:
+      repository: copperlang2007/commission-engine
+      path: mapd_commission_engine/src/use_cases/detective.py
+      symbol: PayoutDetective.analyze
+    evidence: >-
+      41 LOC. Infers *why* a payment is what it is against CMS benchmarks — full
+      initial cycle, full renewal, 1/12 pro-rated initial, 1/12 pro-rated renewal,
+      true-up for remaining months, else unexplained variance / chargeback risk.
+      Returns logic string, confidence, and variance.
+    agencybridge_equivalent: src/lib/shortPayDetector.ts -> classifyVariance
+    comparison: >-
+      agencyBRIDGE classifies only short/over/exact against an expected amount the
+      agent types. commission-engine derives the expectation from CMS FMV rates and
+      names the payment pattern. The owned IP is materially stronger.
+    decision: ADAPT — deferred
+    justification: >-
+      Not portable as-is: Python/FastAPI vs browser TypeScript, and it needs a
+      Policy entity (cms_max_new, cms_max_renewal, effective_date) plus a CMS FMV
+      rate table and a server. agencyBRIDGE's public tool has none of these. See
+      DECISIONS.md D-008.
+    follow_up: >-
+      When agencyBRIDGE gains a backend (see R-001/D-006), port the payout-pattern
+      taxonomy rather than reimplementing it.
+  - id: IP-002
+    capability: Synchronous SHA-256 for the audit hash chain
+    searched_in: copperlang2007/commission-engine
+    evidence: grep for sha256 / audit.?log / hash.?chain across the repo returned no implementation
+    decision: NEW
+    justification: >-
+      No owned TypeScript implementation found in the scanned repository. Web Crypto
+      is async-only and cannot back a synchronous append (D-003). Implemented as
+      src/lib/sha256.ts and differentially verified against Node's crypto on 10
+      fixed vectors plus 500 random inputs.
+  - id: IP-003
+    capability: Commission reconciliation (product surface)
+    observation: >-
+      agencyBRIDGE ships a /reconciliation page while commission-engine and the
+      operator's compLAB line also claim commission reconciliation. This is
+      portfolio-level duplicate capability.
+    decision: FLAG — portfolio consolidation question, out of scope for this pass
+    justification: >-
+      Resolving it is a product/portfolio decision for the owner, not an agent
+      decision. Surfaced per IP-FIRST rather than silently rebuilt or silently
+      ignored.

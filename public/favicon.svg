@@ -1,4 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <rect width="100" height="100" rx="20" fill="#0f1b3d"/>
-  <text x="50" y="68" font-family="Outfit, sans-serif" font-size="48" font-weight="700" fill="#e8edf3" text-anchor="middle">aB</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="agencyBRIDGE">
+  <defs>
+    <linearGradient id="ab-tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#28507f"/>
+      <stop offset="100%" stop-color="#0f1b3d"/>
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="7.5" fill="url(#ab-tile)"/>
+  <g stroke="#e8edf3" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M11 8.4 Q16 17.4 21 8.4"/>
+    <path d="M5.5 18.4 L11 8.4"/>
+    <path d="M21 8.4 L26.5 18.4"/>
+    <path d="M4.5 20.6 H27.5"/>
+    <path d="M11 23.4 V7.2"/>
+    <path d="M21 23.4 V7.2"/>
+  </g>
 </svg>

@@ -6,36 +6,60 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { RoleProvider, useRole } from "@/lib/roleContext";
 import { RoleGuard } from "@/components/shared/RoleGuard";
-import Dashboard from "@/pages/Dashboard";
-import ClientsCRM from "@/pages/ClientsCRM";
-import CalendarPage from "@/pages/CalendarPage";
-import PoliciesCommissions from "@/pages/PoliciesCommissions";
-import AgentsPage from "@/pages/AgentsPage";
-import AdminPage from "@/pages/AdminPage";
-import RetentionPage from "@/pages/RetentionPage";
-import CompliancePage from "@/pages/CompliancePage";
-import DialerPage from "@/pages/DialerPage";
-import KnowledgeBasePage from "@/pages/KnowledgeBasePage";
-import SupervisorPage from "@/pages/SupervisorPage";
-import SecurityPage from "@/pages/SecurityPage";
-import ReconciliationPage from "@/pages/ReconciliationPage";
-import AgentBackofficePage from "@/pages/AgentBackofficePage";
 import LoginPage from "@/pages/LoginPage";
 import LandingPage from "@/pages/LandingPage";
-import OnboardingWizard from "@/pages/OnboardingWizard";
-import ComplianceCenterPage from "@/pages/ComplianceCenterPage";
-import PipelinePage from "@/pages/PipelinePage";
-import QuotingPage from "@/pages/QuotingPage";
-import DocumentsPage from "@/pages/DocumentsPage";
-import WorkflowPage from "@/pages/WorkflowPage";
-import ReportingPage from "@/pages/ReportingPage";
-import ClientPortalPage from "@/pages/ClientPortalPage";
-import DataToolsPage from "@/pages/DataToolsPage";
-import EmailCampaignPage from "@/pages/EmailCampaignPage";
 import { ErrorBoundary } from "@/components/shared/ErrorBoundary";
 import type { ReactNode } from "react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, lazy, Suspense } from "react";
 import NotFound from "./pages/NotFound";
+
+// Route-level code splitting: the authenticated pages are the bulk of the bundle
+// and none of them are reachable until after sign-in, so they load on demand.
+const AdminPage = lazy(() => import("@/pages/AdminPage"));
+const AgentBackofficePage = lazy(() => import("@/pages/AgentBackofficePage"));
+const AgentsPage = lazy(() => import("@/pages/AgentsPage"));
+const CalendarPage = lazy(() => import("@/pages/CalendarPage"));
+const ClientPortalPage = lazy(() => import("@/pages/ClientPortalPage"));
+const ClientsCRM = lazy(() => import("@/pages/ClientsCRM"));
+const ComplianceCenterPage = lazy(() => import("@/pages/ComplianceCenterPage"));
+const CompliancePage = lazy(() => import("@/pages/CompliancePage"));
+const Dashboard = lazy(() => import("@/pages/Dashboard"));
+const DataToolsPage = lazy(() => import("@/pages/DataToolsPage"));
+const DialerPage = lazy(() => import("@/pages/DialerPage"));
+const DocumentsPage = lazy(() => import("@/pages/DocumentsPage"));
+const EmailCampaignPage = lazy(() => import("@/pages/EmailCampaignPage"));
+const KnowledgeBasePage = lazy(() => import("@/pages/KnowledgeBasePage"));
+const OnboardingWizard = lazy(() => import("@/pages/OnboardingWizard"));
+const PipelinePage = lazy(() => import("@/pages/PipelinePage"));
+const PoliciesCommissions = lazy(() => import("@/pages/PoliciesCommissions"));
+const QuotingPage = lazy(() => import("@/pages/QuotingPage"));
+const ReconciliationPage = lazy(() => import("@/pages/ReconciliationPage"));
+const ReportingPage = lazy(() => import("@/pages/ReportingPage"));
+const RetentionPage = lazy(() => import("@/pages/RetentionPage"));
+const SecurityPage = lazy(() => import("@/pages/SecurityPage"));
+const SupervisorPage = lazy(() => import("@/pages/SupervisorPage"));
+const WorkflowPage = lazy(() => import("@/pages/WorkflowPage"));
+
+
+/** Shown while a route chunk is in flight. Mirrors the page header + card rhythm
+ *  so the layout does not jump when the real page arrives. */
+function RouteFallback() {
+  return (
+    <div className="space-y-6 p-1" role="status" aria-busy="true" aria-live="polite">
+      <span className="sr-only">Loading page</span>
+      <div className="space-y-2">
+        <div className="h-7 w-56 animate-pulse rounded-md bg-muted" />
+        <div className="h-4 w-80 animate-pulse rounded-md bg-muted/60" />
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="h-28 animate-pulse rounded-lg border bg-muted/40" />
+        ))}
+      </div>
+      <div className="h-64 animate-pulse rounded-lg border bg-muted/30" />
+    </div>
+  );
+}
 
 const queryClient = new QueryClient();
 
@@ -85,7 +109,11 @@ function AuthenticatedApp() {
   // If authenticated, go straight to the app
   if (isAuthenticated) {
     if (!onboardingDone) {
-      return <OnboardingWizard />;
+      return (
+        <Suspense fallback={<RouteFallback />}>
+          <OnboardingWizard />
+        </Suspense>
+      );
     }
 
     return (
@@ -97,7 +125,9 @@ function AuthenticatedApp() {
               path={r.path}
               element={
                 <AppLayout>
-                  <RoleGuard route={r.path}>{r.element}</RoleGuard>
+                  <RoleGuard route={r.path}>
+                    <Suspense fallback={<RouteFallback />}>{r.element}</Suspense>
+                  </RoleGuard>
                 </AppLayout>
               }
             />

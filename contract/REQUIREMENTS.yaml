@@ -1,0 +1,73 @@
+project: agencybridge
+requirements:
+  - id: REQ-001
+    statement: The application builds, typechecks, and passes its test suite from a clean checkout.
+    priority: critical
+    status: verified
+    evidence: contract/evidence/EV-001-baseline.md
+  - id: REQ-002
+    statement: Every route resolves on direct navigation and refresh in production, not only via in-app links.
+    priority: critical
+    status: verified
+    evidence: contract/evidence/EV-005-routes.md
+  - id: REQ-003
+    statement: >-
+      The audit chain is genuinely tamper-evident — mutating, deleting, or reordering
+      any retained entry is detected, and ordinary use never raises a false alarm.
+    priority: critical
+    status: verified
+    evidence: contract/evidence/EV-002-audit-chain.md
+  - id: REQ-004
+    statement: >-
+      The Short-Pay Detector returns correct results for the cases agents actually hit —
+      chargebacks (negative amounts), nothing received (blank), and unreadable input.
+    priority: critical
+    status: verified
+    evidence: contract/evidence/EV-003-shortpay.md
+  - id: REQ-005
+    statement: Exported CSV cannot carry a spreadsheet formula injected through a user-controlled field.
+    priority: high
+    status: verified
+    evidence: contract/evidence/EV-002-audit-chain.md
+  - id: REQ-006
+    statement: Authentication is enforced by a trust boundary the client cannot forge.
+    priority: critical
+    status: FAILED
+    evidence: contract/RISKS.md R-001
+    note: Blocks the Forge Gate. Resolution path undecided — DECISIONS.md D-006.
+  - id: REQ-007
+    statement: Deterministic checks run automatically on every pull request.
+    priority: high
+    status: implemented
+    evidence: .github/workflows/ci.yml
+    note: Verified locally; first CI run lands with this pull request.
+  - id: REQ-008
+    statement: >-
+      The product presents one coherent identity across app, marketing, and browser
+      chrome, legible from 16px to 64px and on light and dark surfaces.
+    priority: high
+    status: verified
+    evidence: contract/evidence/EV-004-brand.md
+  - id: REQ-009
+    statement: Initial payload is proportionate — the authenticated application does not load before sign-in.
+    priority: medium
+    status: verified
+    evidence: contract/evidence/EV-005-routes.md
+  - id: REQ-010
+    statement: Adversarial review covers the page layer, including untrusted-input surfaces.
+    priority: high
+    status: planned
+    note: R-007. src/lib reviewed this pass; 26 page components not reviewed.
+constraints:
+  - Browser-only build; there is no backend and all data is mock data in src/lib.
+  - Public deployment at https://agencybridge.vercel.app.
+  - React 18 / Vite 5 / Tailwind 3 / shadcn-Radix, pinned to the APIs the code uses.
+  - Navy primary palette is a recorded deviation from house brand standard (D-007).
+acceptance_criteria:
+  - npm run typecheck exits 0
+  - npm test passes with regression coverage for every defect fixed in this pass
+  - npm run build succeeds and the entry chunk stays under 1.2 MB uncompressed
+  - every application route returns 200 and renders on direct navigation in production
+  - verifyAuditIntegrity detects field mutation, deletion, and reordering, and reports
+    retention truncation separately from tampering
+  - no Forge Gate is declared clear while REQ-006 is failing

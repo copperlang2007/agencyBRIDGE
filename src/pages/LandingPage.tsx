@@ -16,101 +16,18 @@ import {
 } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { BrandLockup, BrandMark } from "@/components/shared/BrandMark";
+import {
+  analyzeCommissions,
+  buildShortPayCSV,
+  type ShortPayResult,
+} from "@/lib/shortPayDetector";
 
 // ── Free Commission Short-Pay Detector (Agent Tool) ────────────────
-interface ShortPayResult {
-  totalExpected: number;
-  totalPaid: number;
-  variance: number;
-  variancePct: number;
-  events: { carrier: string; planType: string; expected: number; paid: number; variance: number; classification: string }[];
-  summary: string;
-  urgency: "normal" | "time-sensitive" | "critical";
-  recommendations: string[];
-}
-
-function classifyVariance(expected: number, paid: number): string {
-  const variance = paid - expected;
-  if (Math.abs(variance) < 0.01) return "paid_on_time";
-  if (variance < 0) return "short_pay";
-  if (variance > 0) return "over_pay";
-  return "paid_on_time";
-}
-
-function analyzeCommissions(
-  rows: { carrier: string; planType: string; expected: string; paid: string }[]
-): ShortPayResult {
-  const events = rows
-    .filter((r) => r.carrier && r.expected && r.paid)
-    .map((r) => {
-      const expected = parseFloat(r.expected.replace(/[^0-9.]/g, "")) || 0;
-      const paid = parseFloat(r.paid.replace(/[^0-9.]/g, "")) || 0;
-      const variance = paid - expected;
-      return {
-        carrier: r.carrier,
-        planType: r.planType,
-        expected,
-        paid,
-        variance,
-        classification: classifyVariance(expected, paid),
-      };
-    });
-
-  const totalExpected = events.reduce((s, e) => s + e.expected, 0);
-  const totalPaid = events.reduce((s, e) => s + e.paid, 0);
-  const variance = totalPaid - totalExpected;
-  const variancePct = totalExpected > 0 ? (variance / totalExpected) * 100 : 0;
-  const shortPays = events.filter((e) => e.classification === "short_pay").length;
-
-  let urgency: ShortPayResult["urgency"] = "normal";
-  if (Math.abs(variancePct) > 15 || shortPays >= 3) urgency = "critical";
-  else if (Math.abs(variancePct) > 5 || shortPays >= 1) urgency = "time-sensitive";
-
-  const summary =
-    events.length === 0
-      ? "Enter your commission data to detect short pays, overpayments, and chargebacks instantly."
-      : `Analyzed ${events.length} commission events across ${new Set(events.map((e) => e.carrier)).size} carrier(s). Found ${shortPays} short pay(s) and ${events.filter((e) => e.classification === "over_pay").length} overpayment(s). Net variance: ${variance >= 0 ? "+" : ""}$${variance.toFixed(2)} (${variancePct.toFixed(1)}%).`;
-
-  const recommendations: string[] = [];
-  if (shortPays > 0) {
-    recommendations.push(`Open ${shortPays} dispute(s) for short-paid commissions — include the expected vs. paid amounts and CMS FMV citation.`);
-  }
-  if (events.some((e) => e.classification === "over_pay")) {
-    recommendations.push("Flag overpayments for reserve — carriers may issue chargebacks in future statements.");
-  }
-  if (variancePct < -10) {
-    recommendations.push("Variance exceeds 10% — escalate to agency principal and request carrier statement audit.");
-  }
-  if (recommendations.length === 0 && events.length > 0) {
-    recommendations.push("All commissions match expected amounts — no action needed.");
-  }
-
-  return { totalExpected, totalPaid, variance, variancePct, events, summary, urgency, recommendations };
-}
-
+// Short-pay analysis lives in @/lib/shortPayDetector so the arithmetic is
+// testable without rendering this page. See src/test/shortPayDetector.test.ts.
 function downloadCSV(result: ShortPayResult) {
-  const headers = ["Carrier", "Plan Type", "Expected ($)", "Paid ($)", "Variance ($)", "Classification"];
-  const rows = result.events.map((e) => [
-    e.carrier,
-    e.planType,
-    e.expected.toFixed(2),
-    e.paid.toFixed(2),
-    e.variance.toFixed(2),
-    e.classification,
-  ]);
-  const summaryRows = [
-    [],
-    ["SUMMARY"],
-    ["Total Expected", "", "", result.totalExpected.toFixed(2)],
-    ["Total Paid", "", "", result.totalPaid.toFixed(2)],
-    ["Variance", "", "", `${result.variance.toFixed(2)} (${result.variancePct.toFixed(1)}%)`],
-    ["Urgency", "", "", result.urgency],
-    [],
-    ["RECOMMENDATIONS"],
-    ...result.recommendations.map((r, i) => [`${i + 1}. ${r}`]),
-  ];
-  const csv = [headers, ...rows, ...summaryRows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const blob = new Blob([buildShortPayCSV(result)], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -120,6 +37,7 @@ function downloadCSV(result: ShortPayResult) {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
+
 function CommissionShortPayDetector() {
   const { toast } = useToast();
   const [rows, setRows] = useState([
@@ -668,12 +586,7 @@ export default function LandingPage() {
       >
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="flex h-16 items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground font-display font-bold text-lg">
-                aB
-              </div>
-              <span className="text-xl font-display font-bold tracking-tight">agencyBRIDGE</span>
-            </div>
+            <BrandLockup size={36} wordmarkClassName="text-xl" />
             <div className="hidden lg:flex items-center gap-6">
               <a href="#features" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">Features</a>
               <a href="#comparison" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">Compare</a>

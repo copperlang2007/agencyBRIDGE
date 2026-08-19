@@ -26,6 +26,7 @@ import {
   Mail,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { BrandLockup } from "@/components/shared/BrandMark";
 import { Button } from "@/components/ui/button";
 import { useRole, routePermissions, type RoleId } from "@/lib/roleContext";
 
@@ -117,15 +118,13 @@ export function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose }: Side
       >
       {/* Logo */}
       <div className="flex h-16 items-center gap-3 px-4 border-b border-sidebar-border shrink-0">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-navy-500 to-navy-700 text-white font-display font-bold shrink-0">
-          M+
-        </div>
-        {!collapsed && (
-          <div className="flex flex-col leading-tight overflow-hidden">
-            <span className="font-display font-semibold text-white text-sm">agencyBRIDGE</span>
-            <span className="text-[11px] text-sidebar-foreground/60">Agency Platform</span>
-          </div>
-        )}
+        <BrandLockup
+          size={36}
+          compact={collapsed}
+          subtitle="Agency Platform"
+          wordmarkClassName="text-white text-sm"
+          className="text-sidebar-foreground"
+        />
       </div>
 
       {/* Nav */}

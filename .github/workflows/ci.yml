@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: typecheck · test · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # npm ci fails loudly if package.json and the lockfile disagree, which is
+      # the check that matters for a pinned dependency set.
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      # The app is a client-side SPA with BrowserRouter; vercel.json is what stops
+      # every deep link from 404ing in production. A missing rewrite is a silent,
+      # production-only failure, so it is asserted here rather than trusted.
+      - name: Assert SPA rewrite is configured
+        run: |
+          node -e "
+            const c = require('./vercel.json');
+            const r = (c.rewrites || []).find(x => x.destination === '/index.html');
+            if (!r) { console.error('vercel.json is missing the SPA rewrite to /index.html'); process.exit(1); }
+            console.log('SPA rewrite present:', JSON.stringify(r));
+          "

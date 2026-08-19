@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select";
 import {
   getAuditLog, verifyAuditIntegrity, exportAuditCSV, clearAuditLog,
+  type AuditIntegrityResult,
   subscribeAuditLog,
   type AuditEntry, type AuditSeverity, type AuditCategory,
 } from "@/lib/auditLog";
@@ -322,7 +323,7 @@ export default function SecurityPage() {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [severityFilter, setSeverityFilter] = useState<string>("all");
-  const [integrity, setIntegrity] = useState<{ valid: boolean; brokenAt: number | null }>({ valid: true, brokenAt: null });
+  const [integrity, setIntegrity] = useState<AuditIntegrityResult>({ valid: true, brokenAt: null, truncated: false });
 
   // ── Live event stream state ──────────────────────────────────────
   const [liveStream, setLiveStream] = useState<AuditEntry[]>([]);
@@ -612,15 +613,14 @@ export default function SecurityPage() {
   };
 
   const handleClear = () => {
-    logAudit({ actor: user?.name ?? "unknown", actorId: user?.id ?? "unknown", action: "cleared_audit_log", category: "security", entity: "Audit Log", severity: "critical", details: `${user?.name} cleared the audit log` });
-    setTimeout(() => {
-      const result = clearAuditLog(role ?? undefined);
-      if (result.success) {
-        setLog([]);
-        setLiveStream([]);
-        setIntegrity({ valid: true, brokenAt: null });
-      }
-    }, 100);
+    // clearAuditLog re-seeds the emptied chain with a genesis entry recording who
+    // cleared it, so the erasure stays auditable — read the log back rather than
+    // assuming it is empty.
+    const result = clearAuditLog(role ?? undefined, user?.name ?? "unknown", user?.id ?? "unknown");
+    if (!result.success) return;
+    setLog(getAuditLog());
+    setLiveStream([]);
+    setIntegrity(verifyAuditIntegrity());
   };
 
   // ── Remediation: mark control as resolved ──────────────────────────
@@ -709,7 +709,11 @@ export default function SecurityPage() {
                   {integrity.valid ? "Verified" : "Broken"}
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {integrity.valid ? "No tampering detected" : `Broken at #${integrity.brokenAt}`}
+                  {!integrity.valid
+                    ? `Broken at #${integrity.brokenAt}`
+                    : integrity.truncated
+                      ? "No tampering detected in retained window"
+                      : "No tampering detected"}
                 </p>
               </div>
               {integrity.valid ? <Lock className="h-10 w-10 text-success/30" /> : <ShieldAlert className="h-10 w-10 text-destructive/30" />}
@@ -1485,6 +1489,7 @@ export default function SecurityPage() {
               <CheckCircle2 className="h-5 w-5 text-success shrink-0" />
               <p className="text-sm text-success font-medium">
                 Hash chain integrity verified — all {stats.total} entries are tamper-free.
+                {integrity.truncated && " Older entries have aged out of the local retention window and are outside this check."}
               </p>
             </div>
           )}
