@@ -12,13 +12,14 @@ Deviation from house palette is recorded as `contract/DECISIONS.md` D-007.
 - **Brand promise:** Nothing an auditor asks for is more than one screen away.
 
 ## Logo system
-- **Primary logo:** `BrandLockup` — mark + wordmark, `agency` regular / `BRIDGE` extrabold.
+- **Primary logo:** `BrandLockup` — mark + wordmark, `agency` bold (700) / `BRIDGE` extrabold (800).
 - **Secondary/compact lockup:** `BrandLockup compact` — mark only. The only approved compact form.
 - **Icon / app mark:** `BrandMark` — suspension bridge in a rounded tile (radius 7.5 on a 32 grid).
 - **Favicon:** `public/favicon.svg`, identical path data to the component.
 - **Construction:** two towers crossing the deck, a draped cable between them, back-stays to the abutments. Drawn as geometry, never as type, so it renders without a webfont.
 - **Monochrome:** `tone="mono"` — strokes inherit `currentColor`, tile knocked out to an outline.
 - **Light-background:** `tone="brand"` (navy gradient tile, near-white span).
+- **On the dark app sidebar use `tone="light"`:** the brand tile's gradient endpoint sits at 1.14:1 against the sidebar ground, so its edge disappears.
 - **Dark-background:** `tone="light"` (light tile, navy span).
 - **Minimum size:** 16px for the mark; 20px before the wordmark is dropped in favour of the compact form.
 - **Clear space:** one quarter of the tile's width on all sides.
@@ -36,6 +37,7 @@ Deviation from house palette is recorded as `contract/DECISIONS.md` D-007.
 - **Span/ink:** `#e8edf3` (navy-100).
 - **Semantic:** success, warning, destructive, accent — HSL tokens in `tailwind.config.ts`, themed light/dark via CSS variables in `src/index.css` / `src/styles.css`.
 - **Light/dark tokens:** shadcn variable scheme; `darkMode: ["class"]`.
+- **Accessibility:** inside a lockup the mark is `aria-hidden` — the adjacent wordmark already names the brand, so screen readers announce it once.
 - **Contrast verification:** span `#e8edf3` on navy-900 `#0f1b3d` ≈ 14.6:1 — passes WCAG AA and AAA for both text and non-text. Mark legibility separately verified by render at 16/24/36/64px on white and navy (EV-004).
 - **Typography:** Outfit (display), Figtree (body/sans).
 - **Type scale:** Tailwind default ramp; wordmark uses `font-display` with `tracking-tight`.
@@ -63,7 +65,7 @@ Deviation from house palette is recorded as `contract/DECISIONS.md` D-007.
 - **Loading/empty/error states:** route-level skeleton (`RouteFallback`) mirrors page rhythm; `ErrorBoundary` covers the tree.
 
 ## Production assets
-- **Source:** `src/components/shared/BrandMark.tsx` (single source of geometry).
+- **Source:** `src/components/shared/BrandMark.tsx` (single source of geometry). The tile gradient id is per-instance (`useId`), since SVG `url(#…)` resolves against the whole document and a fixed id would collide across marks.
 - **SVG:** `public/favicon.svg`.
 - **PNG / WebP:** ❌ not exported.
 - **Favicon set:** SVG only; no `.ico` or maskable PNG set.

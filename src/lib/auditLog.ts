@@ -63,6 +63,9 @@ export const AUDIT_STORAGE_KEY = "medicare_audit_log_v2";
 /** Predecessor hash of the first entry in an untruncated chain. */
 export const GENESIS_HASH = "0".repeat(64);
 
+/** Entries this browser has dropped to stay inside the retention cap. */
+const TRIM_COUNT_KEY = `${AUDIT_STORAGE_KEY}_trimmed`;
+
 const MAX_ENTRIES = 2000;
 const MAX_ENTRIES_UNDER_PRESSURE = 500;
 
@@ -155,11 +158,38 @@ export function getAuditLog(): AuditEntry[] {
   }
 }
 
+function readTrimCount(): number {
+  try {
+    const n = Number(localStorage.getItem(TRIM_COUNT_KEY));
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function recordTrim(dropped: number): void {
+  if (dropped <= 0) return;
+  try {
+    localStorage.setItem(TRIM_COUNT_KEY, String(readTrimCount() + dropped));
+  } catch {
+    /* best effort */
+  }
+}
+
+/** Shaped well enough to hash. Anything else is corruption, not a chain entry. */
+function isEntry(e: unknown): e is AuditEntry {
+  if (!e || typeof e !== "object") return false;
+  const c = e as Partial<AuditEntry>;
+  return typeof c.hash === "string" && typeof c.prevHash === "string";
+}
+
 function persist(log: AuditEntry[]): void {
   try {
+    recordTrim(log.length - MAX_ENTRIES);
     localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log.slice(-MAX_ENTRIES)));
   } catch {
     try {
+      recordTrim(log.length - MAX_ENTRIES_UNDER_PRESSURE);
       localStorage.setItem(
         AUDIT_STORAGE_KEY,
         JSON.stringify(log.slice(-MAX_ENTRIES_UNDER_PRESSURE)),
@@ -234,19 +264,32 @@ export function logAudit(params: {
  */
 export function verifyAuditIntegrity(): AuditIntegrityResult {
   const log = getAuditLog();
-  const truncated = log.length > 0 && log[0].prevHash !== GENESIS_HASH;
 
   for (let i = 0; i < log.length; i++) {
     const entry = log[i];
+
+    // A malformed record is corruption. Report it rather than throwing, which
+    // would drop the Security page into the global error boundary.
+    if (!isEntry(entry)) return { valid: false, brokenAt: i, truncated: false };
+
     if (i > 0 && entry.prevHash !== log[i - 1].hash) {
-      return { valid: false, brokenAt: i, truncated };
+      return { valid: false, brokenAt: i, truncated: false };
     }
     if (hashEntry(entry) !== entry.hash) {
-      return { valid: false, brokenAt: i, truncated };
+      return { valid: false, brokenAt: i, truncated: false };
     }
   }
 
-  return { valid: true, brokenAt: null, truncated };
+  // Computed only once the chain has verified, so `truncated` never appears
+  // alongside a failure. A head that no longer starts at genesis is a retention
+  // rollover *only* if retention actually dropped entries; otherwise something
+  // else removed the head, and that is tampering rather than housekeeping.
+  const headMissing = log.length > 0 && log[0].prevHash !== GENESIS_HASH;
+  if (headMissing && readTrimCount() === 0) {
+    return { valid: false, brokenAt: 0, truncated: false };
+  }
+
+  return { valid: true, brokenAt: null, truncated: headMissing };
 }
 
 /** Export log as CSV (SOC 2 evidence artifact). */
@@ -286,6 +329,7 @@ export function clearAuditLog(
   const priorCount = getAuditLog().length;
   try {
     localStorage.removeItem(AUDIT_STORAGE_KEY);
+    localStorage.removeItem(TRIM_COUNT_KEY);
   } catch {
     /* fall through — the re-seed below is what matters */
   }

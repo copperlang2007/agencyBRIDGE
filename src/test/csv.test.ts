@@ -15,7 +15,7 @@ describe("csvCell", () => {
     expect(csvCell("line1\nline2")).toBe('"line1\nline2"');
   });
 
-  it.each(["=cmd|'/c calc'!A1", "+1+1", "-2+3", "@SUM(A1)", "\tlead", "\rlead"])(
+  it.each(["=cmd|'/c calc'!A1", "+1+1", "-2+3", "@SUM(A1)", "\tlead", "\rlead", "\nlead"])(
     "neutralizes a leading formula trigger: %j",
     (payload) => {
       const out = csvCell(payload);

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
   logAudit,
+  GENESIS_HASH,
   getAuditLog,
   verifyAuditIntegrity,
   exportAuditCSV,
@@ -99,22 +100,70 @@ describe("audit chain — tamper detection", () => {
   });
 });
 
+// Retention rollover is normal; head deletion is not. The two look identical in
+// the array, so they are told apart by whether retention actually trimmed.
+const simulateRetentionTrim = (dropped: number) => {
+  const kept = getAuditLog().slice(dropped);
+  localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(kept));
+  localStorage.setItem(`${AUDIT_STORAGE_KEY}_trimmed`, String(dropped));
+  return kept;
+};
+
 describe("audit chain — truncation is not tampering", () => {
-  it("F6: a trimmed log reports truncated, not broken", () => {
+  it("F6: a genuinely trimmed log reports truncated, not broken", () => {
     for (let i = 0; i < 5; i++) logAudit(entry(i));
-    const log = getAuditLog().slice(2); // simulate the retention cap dropping the head
-    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log));
-    const r = verifyAuditIntegrity();
-    expect(r.valid).toBe(true);
-    expect(r.truncated).toBe(true);
+    simulateRetentionTrim(2);
+    expect(verifyAuditIntegrity()).toEqual({ valid: true, brokenAt: null, truncated: true });
   });
 
   it("a trimmed log still detects tampering inside the retained window", () => {
     for (let i = 0; i < 5; i++) logAudit(entry(i));
-    const log = getAuditLog().slice(2);
-    log[1].details = "tampered";
-    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log));
+    const kept = simulateRetentionTrim(2);
+    kept[1].details = "tampered";
+    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(kept));
     expect(verifyAuditIntegrity().valid).toBe(false);
+  });
+
+  // Raised in review: deleting the head produced the same state as a rollover,
+  // so an attacker could drop the genesis entry and have it read as benign.
+  it("deleting the head without any retention trim is reported as tampering", () => {
+    for (let i = 0; i < 5; i++) logAudit(entry(i));
+    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(getAuditLog().slice(1)));
+    expect(verifyAuditIntegrity()).toMatchObject({ valid: false, brokenAt: 0, truncated: false });
+  });
+
+  it("never reports truncated alongside a failure", () => {
+    for (let i = 0; i < 3; i++) logAudit(entry(i));
+    const log = getAuditLog();
+    log[0].prevHash = "f".repeat(64);
+    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log));
+    const r = verifyAuditIntegrity();
+    expect(r.valid).toBe(false);
+    expect(r.truncated).toBe(false);
+  });
+});
+
+describe("audit chain — malformed storage", () => {
+  it("reports a malformed entry instead of throwing", () => {
+    logAudit(entry(0));
+    const log: unknown[] = getAuditLog();
+    log.push(null);
+    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log));
+    expect(() => verifyAuditIntegrity()).not.toThrow();
+    expect(verifyAuditIntegrity()).toMatchObject({ valid: false, brokenAt: 1 });
+  });
+
+  it("reports an entry missing its hash fields", () => {
+    logAudit(entry(0));
+    const log: unknown[] = getAuditLog();
+    log.push({ id: "x", actor: "y" });
+    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log));
+    expect(verifyAuditIntegrity()).toMatchObject({ valid: false, brokenAt: 1 });
+  });
+
+  it("survives a non-array payload", () => {
+    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify({ not: "an array" }));
+    expect(verifyAuditIntegrity()).toEqual({ valid: true, brokenAt: null, truncated: false });
   });
 });
 
@@ -171,10 +220,11 @@ describe("audit chain — truncation cannot be forged", () => {
     expect(verifyAuditIntegrity().valid).toBe(false);
   });
 
-  it("truncation is only reported for a head whose own hash still verifies", () => {
+  it("a genuine rollover with an intact head verifies as truncated", () => {
     for (let i = 0; i < 5; i++) logAudit(entry(i));
-    const trimmed = getAuditLog().slice(2);
-    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(trimmed));
+    const kept = getAuditLog().slice(2);
+    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(kept));
+    localStorage.setItem(`${AUDIT_STORAGE_KEY}_trimmed`, "2");
     expect(verifyAuditIntegrity()).toMatchObject({ valid: true, truncated: true });
   });
 });

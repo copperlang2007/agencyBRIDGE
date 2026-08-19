@@ -37,13 +37,7 @@ jobs:
         run: npm run build
 
       # The app is a client-side SPA with BrowserRouter; vercel.json is what stops
-      # every deep link from 404ing in production. A missing rewrite is a silent,
-      # production-only failure, so it is asserted here rather than trusted.
+      # every deep link from 404ing in production. A missing or too-narrow rewrite
+      # is a silent, production-only failure, so it is asserted here.
       - name: Assert SPA rewrite is configured
-        run: |
-          node -e "
-            const c = require('./vercel.json');
-            const r = (c.rewrites || []).find(x => x.destination === '/index.html');
-            if (!r) { console.error('vercel.json is missing the SPA rewrite to /index.html'); process.exit(1); }
-            console.log('SPA rewrite present:', JSON.stringify(r));
-          "
+        run: node scripts/assert-spa-rewrite.mjs

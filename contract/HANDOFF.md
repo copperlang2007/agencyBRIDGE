@@ -7,7 +7,7 @@
 ## Completed
 
 - **CONTRACT-001** — Governance entrypoint (`BUILD-CONTRACT.md`) and project contract (`contract/`) established. Drift reconciled on entry: the working branch was stale against `origin/main` and was reset before any edit.
-- **AUDIT-001** — Rebuilt the tamper-evident audit chain. Six defects (F1–F7), including two critical: the chain corrupted itself under ordinary use and raised a false "tampering detected" banner, while real edits to `details`/`actorId`/`sessionId` went undetected because those fields were never hashed. Now synchronous SHA-256 over every material field, length-prefixed.
+- **AUDIT-001** — Rebuilt the tamper-evident audit chain. Six defects (F1–F4, F6–F7), including two critical: the chain corrupted itself under ordinary use and raised a false "tampering detected" banner, while real edits to `details`/`actorId`/`sessionId` went undetected because those fields were never hashed. Now synchronous SHA-256 over every material field, length-prefixed.
 - **SHORTPAY-001** — Extracted the public Short-Pay Detector from a 1,400-line component and corrected five defects. A chargeback entered as `-450` was scored as a `+450` payment; a blank "paid" — nothing received — was dropped from the analysis entirely.
 - **PERF-001** — Route-level code splitting. Entry chunk 2,804 kB → 1,040 kB (629 → 315 kB gzip).
 - **CI-001** — GitHub Actions enforcing typecheck, test, build, and an assertion that the SPA rewrite exists.

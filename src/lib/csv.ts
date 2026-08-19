@@ -15,7 +15,7 @@
  */
 export function csvCell(value: unknown): string {
   let s = String(value ?? "");
-  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  if (/^[=+\-@\t\r\n]/.test(s)) s = `'${s}`;
   return `"${s.replace(/"/g, '""')}"`;
 }
 

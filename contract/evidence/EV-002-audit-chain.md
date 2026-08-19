@@ -30,13 +30,21 @@ Failure list preserved at `contract/evidence/EV-002-failures-before.txt`.
 Web Crypto is async-only and cannot back a synchronous append (D-003), so SHA-256
 is implemented directly. Differentially tested against Node `crypto`:
 
-```
-10 fixed vectors (incl. empty, 55/56/57/64-byte padding boundaries, multi-byte UTF-8)
-500 randomized inputs
-ALL MATCH node:crypto
+Reproducible from the repository — `src/test/sha256.differential.test.ts` compares
+`sha256Hex` against Node's `crypto` on every run:
+
+```bash
+npx vitest run src/test/sha256.differential.test.ts
 ```
 
-Plus published FIPS 180-4 vectors in `src/test/sha256.test.ts` (7 tests).
+| Comparison | Count |
+|---|---|
+| fixed inputs (empty, 55/56/57/63/64/65-byte padding boundaries, multi-byte UTF-8, emoji, 1 kB) | 13 |
+| random inputs of varying length | 500 |
+| every length from 0 to 200 bytes | 201 |
+
+Plus published FIPS 180-4 vectors in `src/test/sha256.test.ts`, with the multi-byte
+UTF-8 case pinned to real digests rather than to itself.
 
 ## Residual limit
 

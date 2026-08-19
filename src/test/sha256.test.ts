@@ -36,7 +36,13 @@ describe("sha256Hex", () => {
   });
 
   it("hashes multi-byte UTF-8 by bytes, not code units", () => {
-    expect(sha256Hex("é")).toBe(sha256Hex("Ã©".normalize("NFC")) ? sha256Hex("é") : "");
-    expect(sha256Hex("日本語")).toMatch(/^[0-9a-f]{64}$/);
+    // Pinned to real digests: a code-unit regression would still produce a
+    // well-formed 64-char string, so asserting the shape proves nothing.
+    expect(sha256Hex("é")).toBe(
+      "4a99557e4033c3539de2eb65472017cad5f9557f7a0625a09f1c3f6e2ba69c4c",
+    );
+    expect(sha256Hex("日本語")).toBe(
+      "77710aedc74ecfa33685e33a6c7df5cc83004da1bdcef7fb280f5c2b2e97e0a5",
+    );
   });
 });

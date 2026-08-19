@@ -120,6 +120,7 @@ export function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose }: Side
       <div className="flex h-16 items-center gap-3 px-4 border-b border-sidebar-border shrink-0">
         <BrandLockup
           size={36}
+          tone="light"
           compact={collapsed}
           subtitle="Agency Platform"
           wordmarkClassName="text-white text-sm"

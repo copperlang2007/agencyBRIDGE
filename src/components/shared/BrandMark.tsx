@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -15,9 +16,12 @@ import { cn } from "@/lib/utils";
 
 export type BrandMarkTone = "brand" | "light" | "dark" | "mono";
 
+/** Sentinel meaning "paint this tile with the per-instance gradient". */
+const TILE_GRADIENT = "__gradient__";
+
 const TONES: Record<BrandMarkTone, { tile: string; ink: string }> = {
   // Navy tile, near-white span — the default, for neutral and light surfaces.
-  brand: { tile: "url(#ab-tile)", ink: "#e8edf3" },
+  brand: { tile: TILE_GRADIENT, ink: "#e8edf3" },
   // For dark surfaces: light tile, navy span.
   light: { tile: "#e8edf3", ink: "#0f1b3d" },
   // For light surfaces where the gradient is too heavy (print, favicons).
@@ -31,13 +35,22 @@ export function BrandMark({
   tone = "brand",
   className,
   title = "agencyBRIDGE",
+  decorative = false,
 }: {
   size?: number;
   tone?: BrandMarkTone;
   className?: string;
   title?: string;
+  /** Set when an adjacent wordmark already names the brand, so screen readers
+   *  do not announce "agencyBRIDGE" twice. */
+  decorative?: boolean;
 }) {
+  // SVG fragment references resolve against the whole document, so a fixed
+  // gradient id would collide the moment two brand-tone marks share a page and
+  // every later tile would resolve to the first one's gradient.
+  const gradientId = `ab-tile-${useId().replace(/:/g, "")}`;
   const { tile, ink } = TONES[tone];
+  const fill = tile === TILE_GRADIENT ? `url(#${gradientId})` : tile;
   const stroked = tone === "mono";
 
   return (
@@ -45,12 +58,13 @@ export function BrandMark({
       width={size}
       height={size}
       viewBox="0 0 32 32"
-      role="img"
-      aria-label={title}
+      role={decorative ? "presentation" : "img"}
+      aria-hidden={decorative || undefined}
+      aria-label={decorative ? undefined : title}
       className={cn("shrink-0", className)}
     >
       <defs>
-        <linearGradient id="ab-tile" x1="0" y1="0" x2="1" y2="1">
+        <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
           <stop offset="0%" stopColor="#28507f" />
           <stop offset="100%" stopColor="#0f1b3d" />
         </linearGradient>
@@ -60,7 +74,7 @@ export function BrandMark({
         width="32"
         height="32"
         rx="7.5"
-        fill={tile}
+        fill={fill}
         stroke={stroked ? ink : "none"}
         strokeWidth={stroked ? 1.5 : 0}
       />
@@ -107,7 +121,7 @@ export function BrandLockup({
 }) {
   return (
     <div className={cn("flex items-center gap-3", className)}>
-      <BrandMark size={size} tone={tone} />
+      <BrandMark size={size} tone={tone} decorative={!compact} />
       {!compact && (
         <div className="flex flex-col leading-tight overflow-hidden">
           <span className={cn("font-display font-bold tracking-tight", wordmarkClassName)}>

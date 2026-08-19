@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  toCents,
   parseCurrency,
   classifyVariance,
   analyzeCommissions,
@@ -54,6 +55,25 @@ describe("classifyVariance", () => {
 
   it("treats sub-cent float drift as paid on time", () => {
     expect(classifyVariance(0.1 + 0.2, 0.3)).toBe("paid_on_time");
+  });
+
+  // Raised in review: a float epsilon mis-sorts an exact one-cent shortfall,
+  // because 449.99 - 450.00 is -0.009999999999990905, which is < 0.01.
+  it("catches an exact one-cent short pay at magnitudes where floats drift", () => {
+    for (const [expected, paid] of [
+      [450.0, 449.99],
+      [1000.01, 1000.0],
+      [100.1, 100.09],
+      [19.99, 19.98],
+      [8.07, 8.06],
+    ] as const) {
+      expect(classifyVariance(expected, paid), `${expected}/${paid}`).toBe("short_pay");
+    }
+  });
+
+  it("catches an exact one-cent overpayment just as reliably", () => {
+    expect(classifyVariance(449.99, 450.0)).toBe("over_pay");
+    expect(classifyVariance(1000.0, 1000.01)).toBe("over_pay");
   });
 });
 
@@ -130,7 +150,26 @@ describe("analyzeCommissions", () => {
   });
 });
 
+describe("toCents", () => {
+  it("rounds to exact integer cents", () => {
+    expect(toCents(450)).toBe(45000);
+    expect(toCents(449.99)).toBe(44999);
+    expect(toCents(0.1 + 0.2)).toBe(30);
+    expect(toCents(-450.5)).toBe(-45050);
+  });
+});
+
 describe("buildShortPayCSV", () => {
+  it("omits the variance percentage when there is no positive expectation", () => {
+    const csv = buildShortPayCSV(analyzeCommissions([row({ expected: "0", paid: "100" })]));
+    expect(csv).not.toMatch(/0\.0%/);
+  });
+
+  it("keeps the percentage when the expectation is positive", () => {
+    const csv = buildShortPayCSV(analyzeCommissions([row({ expected: "1000", paid: "900" })]));
+    expect(csv).toContain("-10.0%");
+  });
+
   it("escapes quotes so a carrier name cannot forge a column", () => {
     const csv = buildShortPayCSV(analyzeCommissions([row({ carrier: 'Ace "Big" Co, Inc' })]));
     expect(csv).toContain('""Big""');

@@ -38,8 +38,16 @@ export interface ShortPayResult {
   recommendations: string[];
 }
 
-/** Amounts under a cent apart are the same payment. */
-const CENT = 0.01;
+/**
+ * Money is compared in integer cents.
+ *
+ * A float epsilon does not work here: 449.99 - 450.00 is -0.009999999999990905,
+ * which is *less than* 0.01, so an exactly one-cent short pay was classified as
+ * paid in full. Rounding both sides to cents first makes the comparison exact.
+ */
+export function toCents(amount: number): number {
+  return Math.round(amount * 100);
+}
 
 /**
  * Parse a currency string entered by a human.
@@ -69,9 +77,9 @@ export function parseCurrency(raw: string): { value: number; valid: boolean } {
 }
 
 export function classifyVariance(expected: number, paid: number): VarianceClassification {
-  const variance = paid - expected;
-  if (Math.abs(variance) < CENT) return "paid_on_time";
-  return variance < 0 ? "short_pay" : "over_pay";
+  const varianceCents = toCents(paid) - toCents(expected);
+  if (varianceCents === 0) return "paid_on_time";
+  return varianceCents < 0 ? "short_pay" : "over_pay";
 }
 
 /** A row is in scope once it names a carrier and carries at least one amount. */
@@ -167,7 +175,10 @@ export function buildShortPayCSV(result: ShortPayResult): string {
     ["SUMMARY"],
     ["Total Expected", "", "", result.totalExpected.toFixed(2)],
     ["Total Paid", "", "", result.totalPaid.toFixed(2)],
-    ["Variance", "", "", `${result.variance.toFixed(2)} (${result.variancePct.toFixed(1)}%)`],
+    [
+      "Variance", "", "",
+      `${result.variance.toFixed(2)}${result.totalExpected > 0 ? ` (${result.variancePct.toFixed(1)}%)` : ""}`,
+    ],
     ["Urgency", "", "", result.urgency],
     [],
     ["RECOMMENDATIONS"],

@@ -24,12 +24,13 @@ completed:
   - CI-001: GitHub Actions enforcing typecheck, test, build, and the SPA-rewrite assertion
   - BRAND-001: Single canonical mark replacing three divergent identities (M+, aB, ShieldCheck)
   - REVIEW-001: PR #4 review round — CSV escaping centralised in src/lib/csv.ts; truncation-forgery concern tested and shown already covered
+  - REVIEW-002: PR #4 review round 2 — 19 findings triaged; 12 real defects fixed with regression tests, 6 evidence/doc corrections, 1 recorded as R-010
 gates:
   contract: established
   ip_reuse: inspected-bounded          # 1 of 88 portfolio repos scanned with evidence; see IP-MAP
   architecture: documented
   implementation: hardened
-  tests: 94-pass-narrow-coverage       # 6 of 12 lib modules covered; zero component tests
+  tests: 120-pass-narrow-coverage      # 5 of 14 lib modules covered; zero component tests
   security: FAILED                     # R-001 client-side auth on a public deployment
   redteam: partial                     # lib logic reviewed; 26 page components not reviewed
   brand: package-delivered-motion-absent
