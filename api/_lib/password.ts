@@ -21,9 +21,21 @@ const MAXMEM = 320 * 1024 * 1024;
 
 const PREFIX = "scrypt";
 
+/**
+ * Unicode-normalises a password before it is hashed.
+ *
+ * "café" typed with a composed é and with e + a combining accent are the same
+ * password to the person typing it and different byte strings to scrypt. Both
+ * derivation paths must normalise identically or a password would verify on one
+ * keyboard and fail on another, so this exists once rather than at each call.
+ */
+function normalize(password: string): string {
+  return password.normalize("NFKC");
+}
+
 function derive(password: string, salt: Buffer): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    scrypt(password.normalize("NFKC"), salt, KEYLEN, { N, r: R, p: P, maxmem: MAXMEM }, (err, key) => {
+    scrypt(normalize(password), salt, KEYLEN, { N, r: R, p: P, maxmem: MAXMEM }, (err, key) => {
       if (err) reject(err);
       else resolve(key);
     });
@@ -69,7 +81,7 @@ export async function verifyPassword(password: string, stored: string | null | u
   if (salt.length === 0 || expected.length === 0) return false;
 
   const actual = await new Promise<Buffer | null>((resolve) => {
-    scrypt(password.normalize("NFKC"), salt, expected.length, { N: n, r, p, maxmem: MAXMEM }, (err, key) => {
+    scrypt(normalize(password), salt, expected.length, { N: n, r, p, maxmem: MAXMEM }, (err, key) => {
       resolve(err ? null : key);
     });
   });

@@ -16,22 +16,15 @@
 import { api, type AuditAppend, type AuditRecord } from "@/lib/api";
 import { csvCell, csvRows } from "@/lib/csv";
 
-export type AuditSeverity = "info" | "warning" | "critical" | "success";
-export type AuditCategory =
-  | "auth"
-  | "client"
-  | "policy"
-  | "commission"
-  | "compliance"
-  | "agent"
-  | "communication"
-  | "call"
-  | "supervisor"
-  | "retention"
-  | "knowledge_base"
-  | "security"
-  | "campaign"
-  | "system";
+// Declared once in auditChain, which the API imports too, so a category the UI
+// knows cannot be one the server rejects.
+export {
+  AUDIT_CATEGORIES,
+  AUDIT_SEVERITIES,
+  type AuditCategory,
+  type AuditSeverity,
+} from "@/lib/auditChain";
+import type { AuditCategory, AuditSeverity } from "@/lib/auditChain";
 
 /** An entry as stored and returned by the server. */
 export type AuditEntry = AuditRecord;
@@ -55,6 +48,8 @@ const OUTBOX_KEY = "agencybridge_audit_outbox_v1";
 const MAX_OUTBOX = 200;
 /** Batch window. Long enough to coalesce a burst, short enough to feel immediate. */
 const FLUSH_DELAY_MS = 400;
+/** Backoff ceiling after repeated failures, so an outage is not hammered. */
+const MAX_RETRY_DELAY_MS = 30_000;
 
 type AuditListener = () => void;
 const listeners = new Set<AuditListener>();
@@ -94,47 +89,74 @@ function writeOutbox(entries: AuditAppend[]): void {
   }
 }
 
-let buffer: AuditAppend[] = [];
+/**
+ * The queue of unsent entries, and the only place they live.
+ *
+ * Seeded from storage at load so entries that never reached the server survive
+ * a reload; `writeOutbox` mirrors it after every change. Holding a separate
+ * in-memory buffer *and* an outbox meant each entry sat in both, and a flush
+ * that concatenated the two posted everything twice — duplicate rows in a
+ * tamper-evident chain, which is a corruption of the record, not a cosmetic
+ * bug. One queue, mirrored; never two sources added together.
+ */
+let queue: AuditAppend[] = readOutbox();
 let timer: ReturnType<typeof setTimeout> | null = null;
 let inFlight = false;
+let failures = 0;
+
+/** How many entries one request may carry; the server rejects more. */
+const MAX_BATCH = 25;
 
 /**
- * Sends what is buffered.
+ * Sends what is queued.
  *
- * Entries are removed from the outbox only once the server has accepted them.
- * A rejected batch (offline, signed out) goes back so the next flush retries it;
- * a batch rejected as invalid would otherwise retry forever, so a 4xx other
- * than 401 drops it.
+ * Entries leave the queue only once the server has accepted them. A batch
+ * rejected for a transient reason (offline, signed out, rate-limited) stays
+ * queued for the next attempt; one rejected as invalid is dropped, because
+ * retrying it forever would block everything behind it.
  */
 async function flush(): Promise<void> {
-  if (inFlight) return;
-  const pending = [...readOutbox(), ...buffer];
-  buffer = [];
-  if (pending.length === 0) return;
+  if (inFlight || queue.length === 0) return;
 
   inFlight = true;
-  const batch = pending.slice(0, 25);
-  const rest = pending.slice(25);
+  const batch = queue.slice(0, MAX_BATCH);
   try {
     await api.appendAudit(batch);
-    writeOutbox(rest);
+    // Sliced from the queue as it stands *now*, not from a snapshot taken
+    // before the request: an entry logged while the request was in flight has
+    // been pushed onto the end, and rewriting a pre-flight copy over it would
+    // discard it silently.
+    queue = queue.slice(batch.length);
+    writeOutbox(queue);
     notify();
-    if (rest.length > 0) schedule();
+    if (queue.length > 0) schedule();
+    failures = 0;
   } catch (err) {
     const status = (err as { status?: number }).status ?? 0;
     const retryable = status === 0 || status === 401 || status === 429 || status >= 500;
-    writeOutbox(retryable ? pending : rest);
+    if (retryable) {
+      // Nothing else will come back for these: logAudit schedules a flush, but
+      // an idle tab may not log again for minutes, and until it does the
+      // entries sit unsent. Retry on a backoff instead of waiting to be
+      // prompted.
+      failures += 1;
+      schedule(Math.min(FLUSH_DELAY_MS * 2 ** failures, MAX_RETRY_DELAY_MS));
+    } else {
+      queue = queue.slice(batch.length);
+      writeOutbox(queue);
+      failures = 0;
+    }
   } finally {
     inFlight = false;
   }
 }
 
-function schedule(): void {
+function schedule(delay: number = FLUSH_DELAY_MS): void {
   if (timer !== null) return;
   timer = setTimeout(() => {
     timer = null;
     void flush();
-  }, FLUSH_DELAY_MS);
+  }, delay);
 }
 
 /**
@@ -163,8 +185,8 @@ export function logAudit(params: {
     severity: params.severity || "info",
     details: params.details || "",
   };
-  buffer.push(entry);
-  writeOutbox([...readOutbox(), entry]);
+  queue.push(entry);
+  writeOutbox(queue);
   schedule();
 }
 
@@ -179,7 +201,7 @@ export function flushAuditLog(): Promise<void> {
 
 /** How many entries are waiting to reach the server. */
 export function pendingAuditCount(): number {
-  return readOutbox().length + buffer.length;
+  return queue.length;
 }
 
 /** The tenant's trail, newest first. Requires permission to read the log. */

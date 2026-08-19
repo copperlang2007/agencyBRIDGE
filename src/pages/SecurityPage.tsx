@@ -4,7 +4,7 @@ import {
   ShieldCheck, ShieldAlert, FileCheck2, Lock, Download, Search,
   Activity, Database, KeyRound, Eye, AlertTriangle, CheckCircle2,
   Server, GitBranch, Network, Bug, FileText, Users, Clock,
-  Radio, Pause, Play, MessageSquare, ChevronRight, Copy,
+  Radio, Pause, Play, MessageSquare, ChevronRight, Copy, ShieldQuestion,
 } from "lucide-react";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -324,7 +324,11 @@ export default function SecurityPage() {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [severityFilter, setSeverityFilter] = useState<string>("all");
-  const [integrity, setIntegrity] = useState<AuditIntegrityResult>({ valid: true, brokenAt: null, truncated: false, count: 0 });
+  // Null until the server has answered. It must not start as "valid": a failed
+  // load would then leave the page asserting a verified chain on the strength
+  // of an initial value, which is the exact failure this whole feature exists
+  // to prevent.
+  const [integrity, setIntegrity] = useState<AuditIntegrityResult | null>(null);
   const [logError, setLogError] = useState<string | null>(null);
 
   // ── Live event stream state ──────────────────────────────────────
@@ -719,18 +723,26 @@ export default function SecurityPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Chain Integrity</p>
-                <p className={`text-2xl font-display font-bold mt-1 ${integrity.valid ? "text-success" : "text-destructive"}`}>
-                  {integrity.valid ? "Verified" : "Broken"}
+                <p className={`text-2xl font-display font-bold mt-1 ${
+                  integrity === null ? "text-muted-foreground" : integrity.valid ? "text-success" : "text-destructive"
+                }`}>
+                  {integrity === null ? (logError ? "Unavailable" : "Checking…") : integrity.valid ? "Verified" : "Broken"}
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {!integrity.valid
-                    ? `Broken at #${integrity.brokenAt}`
-                    : integrity.truncated
-                      ? "No tampering detected in retained window"
-                      : "No tampering detected"}
+                  {integrity === null
+                    ? logError ?? "Asking the server to re-derive the chain"
+                    : !integrity.valid
+                      ? integrity.reason ?? `Broken at #${integrity.brokenAt}`
+                      : integrity.truncated
+                        ? "No tampering detected in retained window"
+                        : `No tampering detected across ${integrity.count} entries`}
                 </p>
               </div>
-              {integrity.valid ? <Lock className="h-10 w-10 text-success/30" /> : <ShieldAlert className="h-10 w-10 text-destructive/30" />}
+              {integrity === null
+                ? <ShieldQuestion className="h-10 w-10 text-muted-foreground/30" />
+                : integrity.valid
+                  ? <Lock className="h-10 w-10 text-success/30" />
+                  : <ShieldAlert className="h-10 w-10 text-destructive/30" />}
             </div>
           </CardContent>
         </Card>
@@ -1490,20 +1502,29 @@ export default function SecurityPage() {
           </div>
 
           {/* Integrity banner */}
-          {!integrity.valid && (
-            <div className="mt-3 flex items-center gap-2 rounded-lg bg-destructive/10 border border-destructive/30 px-4 py-3">
-              <ShieldAlert className="h-5 w-5 text-destructive shrink-0" />
-              <p className="text-sm text-destructive font-medium">
-                Audit chain integrity broken at entry #{integrity.brokenAt}. Possible tampering detected. Investigate immediately.
+          {integrity === null && logError && (
+            <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+              <ShieldQuestion className="h-4 w-4 mt-0.5 shrink-0 text-amber-600" />
+              <p className="text-sm text-amber-800 dark:text-amber-300">
+                The audit trail could not be loaded, so its integrity is unknown — this is not a
+                statement that the chain is intact. {logError}
               </p>
             </div>
           )}
-          {integrity.valid && stats.total > 0 && (
+          {integrity !== null && !integrity.valid && (
+            <div className="mt-3 flex items-center gap-2 rounded-lg bg-destructive/10 border border-destructive/30 px-4 py-3">
+              <ShieldAlert className="h-5 w-5 text-destructive shrink-0" />
+              <p className="text-sm text-destructive font-medium">
+                Audit chain integrity broken at entry #{integrity.brokenAt}. {integrity.reason} Possible tampering detected. Investigate immediately.
+              </p>
+            </div>
+          )}
+          {integrity !== null && integrity.valid && stats.total > 0 && (
             <div className="mt-3 flex items-center gap-2 rounded-lg bg-success/10 border border-success/30 px-4 py-3">
               <CheckCircle2 className="h-5 w-5 text-success shrink-0" />
               <p className="text-sm text-success font-medium">
-                Hash chain integrity verified — all {stats.total} entries are tamper-free.
-                {integrity.truncated && " Older entries have aged out of the local retention window and are outside this check."}
+                Hash chain integrity verified by the server — all {integrity.count} entries re-derived and matching.
+                {integrity.truncated && " Entries are missing from the front of the chain and are outside this check."}
               </p>
             </div>
           )}

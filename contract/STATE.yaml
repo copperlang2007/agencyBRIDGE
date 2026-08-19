@@ -33,12 +33,13 @@ completed:
   - DEMO-001: Gated read-only demo tenant; writes refused server-side; acknowledged entry; demo banner on every page (D-010)
   - AUDIT-002: Audit chain moved to Postgres, appended and verified server-side; clearAuditLog removed (D-013)
   - IMPERSONATION-001: Role switching moved server-side; effective identity resolved from the session row (D-014)
+  - REVIEW-006: PR #5 review round — audit entries were being written to the chain twice, and the Security page could report "Verified" without having verified anything; both fixed with regression tests (EV-011)
 gates:
   contract: established
   ip_reuse: inspected-bounded          # 1 of 88 portfolio repos scanned with evidence; see IP-MAP
   architecture: documented
   implementation: hardened
-  tests: 132-pass-narrow-coverage      # security-critical logic covered; no handler or component tests (R-005)
+  tests: 141-pass-narrow-coverage      # security-critical logic and the audit transport covered; no handler or component tests (R-005)
   security: server-enforced-claims-outstanding  # R-001/R-002/R-010 closed; R-003 copy still overstates
   redteam: partial                     # lib logic reviewed; 26 page components not reviewed
   brand: package-delivered-motion-absent

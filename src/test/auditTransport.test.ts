@@ -1,0 +1,184 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+/**
+ * The client-side audit transport.
+ *
+ * It does not decide what an entry says — the server takes actor, session and
+ * IP from the session — so what is tested here is delivery: each entry reaches
+ * the server exactly once, survives a reload if it has not been sent, and a
+ * server that keeps rejecting it does not block everything behind it.
+ *
+ * "Exactly once" is the load-bearing property. A duplicate is not a cosmetic
+ * defect in a tamper-evident chain: it is a second row, with its own sequence
+ * number and hash, recording an action that happened once.
+ */
+
+const appendAudit = vi.fn<(entries: unknown[]) => Promise<{ written: number }>>();
+
+vi.mock("@/lib/api", () => ({
+  api: { appendAudit: (entries: unknown[]) => appendAudit(entries) },
+  ApiError: class ApiError extends Error {},
+}));
+
+async function freshModule() {
+  vi.resetModules();
+  return import("@/lib/auditLog");
+}
+
+/** Lets the batching timer fire and the in-flight request settle. */
+async function settle(ms = 600) {
+  await vi.advanceTimersByTimeAsync(ms);
+  await vi.runAllTicks?.();
+  await Promise.resolve();
+}
+
+beforeEach(() => {
+  localStorage.clear();
+  appendAudit.mockReset();
+  appendAudit.mockResolvedValue({ written: 1 });
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("logAudit delivery", () => {
+  it("sends one entry exactly once", async () => {
+    const { logAudit } = await freshModule();
+    logAudit({ action: "A", category: "client", entity: "e" });
+
+    await settle();
+
+    expect(appendAudit).toHaveBeenCalledTimes(1);
+    const sent = appendAudit.mock.calls[0][0];
+    expect(sent).toHaveLength(1);
+  });
+
+  it("does not send the same entry twice", async () => {
+    // The regression: entries were held in an in-memory buffer *and* mirrored
+    // to the outbox, and the flush concatenated both — so every entry was
+    // posted twice and appeared twice in the chain.
+    const { logAudit } = await freshModule();
+    logAudit({ action: "A", category: "client", entity: "e", entityId: "1" });
+    logAudit({ action: "B", category: "client", entity: "e", entityId: "2" });
+
+    await settle();
+
+    const everySent = appendAudit.mock.calls.flatMap((c) => c[0] as { entityId: string }[]);
+    expect(everySent).toHaveLength(2);
+    expect(everySent.map((e) => e.entityId).sort()).toEqual(["1", "2"]);
+  });
+
+  it("clears the outbox once the server accepts", async () => {
+    const { logAudit, pendingAuditCount } = await freshModule();
+    logAudit({ action: "A", category: "client", entity: "e" });
+    expect(pendingAuditCount()).toBe(1);
+
+    await settle();
+
+    expect(pendingAuditCount()).toBe(0);
+  });
+});
+
+describe("failure handling", () => {
+  it("keeps an entry queued when the send fails transiently", async () => {
+    const { logAudit, pendingAuditCount } = await freshModule();
+    appendAudit.mockRejectedValue(Object.assign(new Error("offline"), { status: 0 }));
+
+    logAudit({ action: "A", category: "client", entity: "e" });
+    await settle();
+
+    expect(pendingAuditCount()).toBe(1);
+  });
+
+  it("retries the kept entry on the next flush, still exactly once", async () => {
+    const { logAudit, flushAuditLog, pendingAuditCount } = await freshModule();
+    appendAudit.mockRejectedValueOnce(Object.assign(new Error("offline"), { status: 0 }));
+
+    logAudit({ action: "A", category: "client", entity: "e", entityId: "1" });
+    await settle();
+    expect(pendingAuditCount()).toBe(1);
+
+    appendAudit.mockResolvedValue({ written: 1 });
+    await flushAuditLog();
+
+    const everySent = appendAudit.mock.calls.flatMap((c) => c[0] as { entityId: string }[]);
+    expect(everySent.filter((e) => e.entityId === "1")).toHaveLength(2); // one failed, one succeeded
+    expect(pendingAuditCount()).toBe(0);
+  });
+
+  it("keeps an entry logged while a send is in flight", async () => {
+    // The subtle one: the request is awaited, and anything logged during that
+    // window lands on the end of the queue. Rewriting a pre-flight snapshot
+    // over the queue on completion would discard it, and nothing would notice
+    // until the entry was missing from the trail.
+    const { logAudit, flushAuditLog, pendingAuditCount } = await freshModule();
+
+    let release: (v: { written: number }) => void = () => {};
+    appendAudit.mockImplementationOnce(
+      () => new Promise((resolve) => { release = resolve; }),
+    );
+
+    logAudit({ action: "A", category: "client", entity: "e", entityId: "first" });
+    const inFlight = flushAuditLog();
+
+    // Logged while the request is open.
+    logAudit({ action: "B", category: "client", entity: "e", entityId: "during" });
+
+    release({ written: 1 });
+    await inFlight;
+
+    expect(pendingAuditCount()).toBe(1);
+
+    appendAudit.mockResolvedValue({ written: 1 });
+    await flushAuditLog();
+
+    const sent = appendAudit.mock.calls.flatMap((c) => c[0] as { entityId: string }[]);
+    expect(sent.map((e) => e.entityId)).toEqual(["first", "during"]);
+  });
+
+  it("retries after a transient failure without being prompted by a new entry", async () => {
+    // An idle tab may not log again for minutes. Entries must not sit unsent
+    // waiting to be nudged.
+    const { logAudit, pendingAuditCount } = await freshModule();
+    appendAudit.mockRejectedValueOnce(Object.assign(new Error("offline"), { status: 503 }));
+
+    logAudit({ action: "A", category: "client", entity: "e" });
+    await settle();
+    expect(pendingAuditCount()).toBe(1);
+
+    appendAudit.mockResolvedValue({ written: 1 });
+    // No further logAudit call — only time passes.
+    await settle(2000);
+
+    expect(pendingAuditCount()).toBe(0);
+  });
+
+  it("drops an entry the server rejects as invalid, so it cannot block the queue", async () => {
+    const { logAudit, pendingAuditCount } = await freshModule();
+    appendAudit.mockRejectedValue(Object.assign(new Error("bad"), { status: 400 }));
+
+    logAudit({ action: "A", category: "client", entity: "e" });
+    await settle();
+
+    expect(pendingAuditCount()).toBe(0);
+  });
+
+  it("recovers entries left in storage by a previous page load", async () => {
+    const { logAudit } = await freshModule();
+    appendAudit.mockRejectedValue(Object.assign(new Error("offline"), { status: 0 }));
+    logAudit({ action: "A", category: "client", entity: "e", entityId: "kept" });
+    await settle();
+
+    // A reload: a new module instance reads what storage still holds.
+    appendAudit.mockReset();
+    appendAudit.mockResolvedValue({ written: 1 });
+    const reloaded = await freshModule();
+    expect(reloaded.pendingAuditCount()).toBe(1);
+
+    await reloaded.flushAuditLog();
+    const sent = appendAudit.mock.calls.flatMap((c) => c[0] as { entityId: string }[]);
+    expect(sent.map((e) => e.entityId)).toEqual(["kept"]);
+  });
+});

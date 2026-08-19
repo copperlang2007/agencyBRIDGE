@@ -10,6 +10,34 @@
 
 import { sha256Hex } from "./sha256";
 
+/**
+ * The audit vocabulary.
+ *
+ * One definition, because there are three consumers that must agree: the API
+ * validates an incoming entry against these, the database constrains the stored
+ * severity to them, and the UI types and CSV export read them back. Held
+ * separately they drift silently — a category the UI knows and the server
+ * rejects, or worse, one the server accepts and the UI has no arm for.
+ */
+export const AUDIT_CATEGORIES = [
+  "auth", "client", "policy", "commission", "compliance", "agent", "communication",
+  "call", "supervisor", "retention", "knowledge_base", "security", "campaign", "system",
+] as const;
+
+export type AuditCategory = (typeof AUDIT_CATEGORIES)[number];
+
+export const AUDIT_SEVERITIES = ["info", "warning", "critical", "success"] as const;
+
+export type AuditSeverity = (typeof AUDIT_SEVERITIES)[number];
+
+export function isAuditCategory(value: unknown): value is AuditCategory {
+  return typeof value === "string" && (AUDIT_CATEGORIES as readonly string[]).includes(value);
+}
+
+export function isAuditSeverity(value: unknown): value is AuditSeverity {
+  return typeof value === "string" && (AUDIT_SEVERITIES as readonly string[]).includes(value);
+}
+
 /** Predecessor hash of the first entry in an untruncated chain. */
 export const GENESIS_HASH = "0".repeat(64);
 

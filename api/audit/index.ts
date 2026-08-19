@@ -10,16 +10,11 @@ import {
 } from "../_lib/http.js";
 import { requireAction, requireSameOrigin, requireUser } from "../_lib/auth.js";
 import { appendAudit, listAudit } from "../_lib/audit.js";
+import { isAuditCategory, isAuditSeverity } from "../../src/lib/auditChain.js";
 
 /** Ceiling on one page of entries, and on one batch of appends. */
 const MAX_LIMIT = 500;
 const MAX_BATCH = 25;
-
-const CATEGORIES = new Set([
-  "auth", "client", "policy", "commission", "compliance", "agent", "communication",
-  "call", "supervisor", "retention", "knowledge_base", "security", "campaign", "system",
-]);
-const SEVERITIES = new Set(["info", "warning", "critical", "success"]);
 
 function str(v: unknown, fallback = ""): string {
   return typeof v === "string" && v.length > 0 ? v : fallback;
@@ -61,8 +56,8 @@ export default withErrors(async (req: VercelRequest, res: VercelResponse) => {
 
     const category = str(e.category, "system");
     const severity = str(e.severity, "info");
-    if (!CATEGORIES.has(category)) throw badRequest(`Unknown audit category "${category}".`);
-    if (!SEVERITIES.has(severity)) throw badRequest(`Unknown audit severity "${severity}".`);
+    if (!isAuditCategory(category)) throw badRequest(`Unknown audit category "${category}".`);
+    if (!isAuditSeverity(severity)) throw badRequest(`Unknown audit severity "${severity}".`);
 
     // Actor, session and network identity come from the session, never from the
     // request body. A client that could name its own actor could write entries
