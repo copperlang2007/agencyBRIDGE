@@ -214,3 +214,46 @@ way.
 - **Demo audit entries carry visitor IP and user agent**, readable by any demo
   visitor with the auditor role. **R-018.**
 - **CSV export covers only the 500 loaded rows.** **R-019.**
+
+---
+
+# Third round — a stale verdict, which is the same defect one step later
+
+Vercel Agent Review, against `6770e89`, on code I had just changed to fix the
+first version of this:
+
+> A failed `reload()`/`handleVerify()` leaves stale `integrity` state, so the
+> Chain Integrity card falsely shows "Verified" while an error banner is
+> displayed.
+
+Correct, and a genuinely different case from the one already fixed. That fix
+covered the **initial** state — `integrity` starts `null` rather than
+optimistically valid, so a page that has never had an answer does not claim one.
+It did nothing for the **stale** case: a load that succeeded, followed by a
+refresh that failed, kept the earlier verdict on screen while the error was
+reported beside it.
+
+"Verified" then means *it was intact when we last managed to ask*, displayed
+identically to *it is intact*. For a control an auditor reads, those are not the
+same statement, and the difference is invisible.
+
+Both catch blocks now clear the verdict as well as recording the error, and the
+banner says the listed entries may be out of date, since only the verdict is
+cleared and the rows are left in place as context.
+
+Verified in the browser — load cleanly, then fail only the refresh
+(`screens/08-security-stale-verdict.webp`):
+
+```
+1. loaded successfully : Verified
+2. refresh then failed : Unavailable
+   still claims Verified?  false
+   says integrity unknown? true
+```
+
+Worth recording plainly: this is the third distinct way the same page has
+claimed a verified chain without having verified one. First the browser verified
+its own chain; then it assumed an answer it had never received; then it kept an
+answer that had expired. The failure mode is not a bug that keeps recurring by
+accident — it is what a status display does by default, unless every path that
+can fail is made to say so.

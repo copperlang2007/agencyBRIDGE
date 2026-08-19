@@ -347,6 +347,12 @@ export default function SecurityPage() {
       setIntegrity(result);
       setLogError(null);
     } catch (err) {
+      // The verdict is cleared, not merely accompanied by an error. Leaving the
+      // previous "Verified" in place would state that the chain is intact on the
+      // strength of a check that has since failed — stale, and indistinguishable
+      // on screen from a live confirmation. Not knowing is its own answer and
+      // has to be shown as one.
+      setIntegrity(null);
       setLogError(err instanceof ApiError ? err.message : "Could not load the audit trail.");
     }
   }, []);
@@ -631,6 +637,7 @@ export default function SecurityPage() {
       });
       await reload();
     } catch (err) {
+      setIntegrity(null);
       setLogError(err instanceof ApiError ? err.message : "Verification failed.");
     }
   };
@@ -1507,7 +1514,8 @@ export default function SecurityPage() {
               <ShieldQuestion className="h-4 w-4 mt-0.5 shrink-0 text-amber-600" />
               <p className="text-sm text-amber-800 dark:text-amber-300">
                 The audit trail could not be loaded, so its integrity is unknown — this is not a
-                statement that the chain is intact. {logError}
+                statement that the chain is intact, and any entries listed below may be out of
+                date. {logError}
               </p>
             </div>
           )}
