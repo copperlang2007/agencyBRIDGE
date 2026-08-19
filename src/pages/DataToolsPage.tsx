@@ -10,7 +10,7 @@ import { useRole } from "@/lib/roleContext";
 import { useToast } from "@/hooks/use-toast";
 import { logAudit } from "@/lib/auditLog";
 import { clients, policies, type Client, type Policy, type PlanType, type ClientStatus, type PolicyStatus, type LeadSource } from "@/lib/mockData";
-import { scopedClients, scopedPolicies } from "@/lib/dataScope";
+import { useClients, usePolicies } from "@/hooks/useBook";
 import {
   Upload,
   Download,
@@ -239,8 +239,8 @@ export default function DataToolsPage() {
   const [dragOver, setDragOver] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
 
-  const scopedClientsData = scopedClients(user);
-  const scopedPoliciesData = scopedPolicies(user);
+  const scopedClientsData = useClients();
+  const scopedPoliciesData = usePolicies();
 
   const handleExport = useCallback(
     (type: "clients" | "policies") => {

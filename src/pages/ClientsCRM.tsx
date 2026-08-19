@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { clients, type Client, type ClientStatus, type PlanType } from "@/lib/mockData";
-import { scopedClients } from "@/lib/dataScope";
+import { useClientsQuery } from "@/hooks/useBook";
 import { ScopeBadge } from "@/components/shared/ScopeBadge";
 import { format, parseISO, differenceInDays } from "date-fns";
 
@@ -63,7 +63,8 @@ export default function ClientsCRM() {
     return () => window.removeEventListener("assist:copy-to-notes", handler);
   }, [activeClient]);
 
-  const scoped = useMemo(() => scopedClients(user), [user]);
+  const clientsQuery = useClientsQuery();
+  const scoped = clientsQuery.data ?? [];
 
   const filtered = useMemo(() => {
     return scoped.filter((c) => {

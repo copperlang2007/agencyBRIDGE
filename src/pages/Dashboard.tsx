@@ -24,7 +24,7 @@ import {
   planTypeDistribution,
   atRiskClients,
 } from "@/lib/mockData";
-import { scopedAppointments, scopedAgents, scopedClients } from "@/lib/dataScope";
+import { useAppointments, useAgents, useClients } from "@/hooks/useBook";
 import { ScopeBadge } from "@/components/shared/ScopeBadge";
 import {
   AreaChart,
@@ -58,9 +58,9 @@ export default function Dashboard() {
   const { user, role } = useRole();
   useEffect(() => { logAudit({ actor: user?.name ?? "unknown", actorId: user?.id ?? "unknown", action: "viewed_dashboard", category: "system", entity: "Dashboard", severity: "info" }); }, [user]);
 
-  const scopedAppts = useMemo(() => scopedAppointments(user), [user]);
-  const scopedAgentList = useMemo(() => scopedAgents(user), [user]);
-  const scopedClientList = useMemo(() => scopedClients(user), [user]);
+  const scopedAppts = useAppointments();
+  const scopedAgentList = useAgents();
+  const scopedClientList = useClients();
   const isScoped = role === "agent";
 
   const todayAppointments = scopedAppts

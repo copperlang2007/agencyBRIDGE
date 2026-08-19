@@ -2,7 +2,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Navigate, Routes, Route } from "react-router-dom";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { RoleProvider, useRole } from "@/lib/roleContext";
 import { RoleGuard } from "@/components/shared/RoleGuard";
@@ -92,7 +92,7 @@ const routes: { path: string; element: ReactNode }[] = [
 ];
 
 function AuthenticatedApp() {
-  const { isAuthenticated } = useRole();
+  const { isAuthenticated, loading, isDemo } = useRole();
   const [onboardingDone, setOnboardingDone] = useState<boolean>(() => {
     try {
       return !!localStorage.getItem("onboarding_completed");
@@ -107,9 +107,20 @@ function AuthenticatedApp() {
     return () => window.removeEventListener("onboarding-done", handler);
   }, []);
 
+  // Identity now comes from the server, so there is a moment on every load
+  // before the answer arrives. Rendering the landing page during it would
+  // bounce a signed-in operator out to marketing copy and then snap back.
+  if (loading) {
+    return <RouteFallback />;
+  }
+
   // If authenticated, go straight to the app
   if (isAuthenticated) {
-    if (!onboardingDone) {
+    // A demo visitor asked to look at the product, not to configure a workspace.
+    // Putting a six-step setup wizard in front of them buries the thing they
+    // came to see, and none of what they enter would be kept — the demo tenant
+    // is read-only.
+    if (!onboardingDone && !isDemo) {
       return (
         <StaticErrorBoundary routeKey="onboarding">
           <Suspense fallback={<RouteFallback />}>
@@ -137,6 +148,12 @@ function AuthenticatedApp() {
               }
             />
           ))}
+          {/* Signing in does not change the URL, so a session that started at
+              /login would land on the catch-all and greet the user with a 404
+              — the first thing they see after a successful sign-in. /login and
+              the marketing root belong to the signed-out router; once there is
+              a session they resolve to the dashboard. */}
+          <Route path="/login" element={<Navigate to="/" replace />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>

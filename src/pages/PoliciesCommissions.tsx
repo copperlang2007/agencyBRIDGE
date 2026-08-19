@@ -17,7 +17,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { commissionTrend } from "@/lib/mockData";
-import { scopedPolicies, scopedAgents } from "@/lib/dataScope";
+import { usePolicies, useAgents } from "@/hooks/useBook";
 import { ScopeBadge } from "@/components/shared/ScopeBadge";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -32,8 +32,8 @@ export default function PoliciesCommissions() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [activeTab, setActiveTab] = useState("policies");
 
-  const scoped = useMemo(() => scopedPolicies(user), [user]);
-  const visibleAgents = useMemo(() => scopedAgents(user), [user]);
+  const scoped = usePolicies();
+  const visibleAgents = useAgents();
 
   const filtered = useMemo(() => {
     return scoped.filter(p => {

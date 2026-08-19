@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ApiError } from "@/lib/api";
 import {
   ShieldCheck, ShieldAlert, FileCheck2, Lock, Download, Search,
   Activity, Database, KeyRound, Eye, AlertTriangle, CheckCircle2,
@@ -15,7 +16,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
-  getAuditLog, verifyAuditIntegrity, exportAuditCSV, clearAuditLog,
+  fetchAuditLog, fetchAuditIntegrity, exportAuditCSV,
   type AuditIntegrityResult,
   subscribeAuditLog,
   type AuditEntry, type AuditSeverity, type AuditCategory,
@@ -323,7 +324,8 @@ export default function SecurityPage() {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [severityFilter, setSeverityFilter] = useState<string>("all");
-  const [integrity, setIntegrity] = useState<AuditIntegrityResult>({ valid: true, brokenAt: null, truncated: false });
+  const [integrity, setIntegrity] = useState<AuditIntegrityResult>({ valid: true, brokenAt: null, truncated: false, count: 0 });
+  const [logError, setLogError] = useState<string | null>(null);
 
   // ── Live event stream state ──────────────────────────────────────
   const [liveStream, setLiveStream] = useState<AuditEntry[]>([]);
@@ -331,28 +333,41 @@ export default function SecurityPage() {
   const streamRef = useRef<HTMLDivElement>(null);
   const maxStreamItems = 50;
 
-  useEffect(() => {
-    logAudit({ actor: user?.name ?? "unknown", actorId: user?.id ?? "unknown", action: "viewed_security_dashboard", category: "security", entity: "Security Page", severity: "info" });
-    setLog(getAuditLog());
-    setIntegrity(verifyAuditIntegrity());
+  // Reads the trail and the server's verdict on it. Both come from the API:
+  // the chain lives in Postgres and is verified there, so a browser that felt
+  // like reporting "Verified" cannot.
+  const reload = useCallback(async () => {
+    try {
+      const [entries, result] = await Promise.all([fetchAuditLog(500), fetchAuditIntegrity()]);
+      setLog(entries);
+      setIntegrity(result);
+      setLogError(null);
+    } catch (err) {
+      setLogError(err instanceof ApiError ? err.message : "Could not load the audit trail.");
+    }
   }, []);
 
-  // Subscribe to real-time audit events (same-tab + cross-tab via BroadcastChannel)
   useEffect(() => {
-    const unsub = subscribeAuditLog((entry) => {
-      setLog((prev) => {
-        // Avoid duplicates from cross-tab broadcast + storage sync
-        if (prev.some((e) => e.id === entry.id)) return prev;
-        return [...prev, entry];
-      });
-      setLiveStream((prev) => {
-        if (prev.some((e) => e.id === entry.id)) return prev;
-        if (streamPausedRef.current) return prev;
-        return [...prev, entry].slice(-maxStreamItems);
-      });
+    logAudit({ action: "viewed_security_dashboard", category: "security", entity: "Security Page", severity: "info" });
+    void reload();
+  }, [reload]);
+
+  // Subscribe to real-time audit events (same-tab + cross-tab via BroadcastChannel)
+  // The transport notifies after a batch reaches the server. Refetch rather
+  // than splicing a local copy in: the entry that matters is the one the server
+  // stored and hashed, not the one this tab hoped it sent.
+  useEffect(() => {
+    return subscribeAuditLog(() => {
+      if (streamPausedRef.current) return;
+      void reload();
     });
-    return unsub;
-  }, []);
+  }, [reload]);
+
+  // Newest entries feed the live panel.
+  useEffect(() => {
+    if (streamPaused) return;
+    setLiveStream(log.slice(0, maxStreamItems).slice().reverse());
+  }, [log, streamPaused]);
 
   // Keep a ref of pause state so the subscription closure always reads current value
   // without needing to re-subscribe on every toggle
@@ -588,7 +603,7 @@ export default function SecurityPage() {
 
   const handleExport = () => {
     logAudit({ actor: "admin", actorId: "admin-001", action: "exported_audit_log", category: "security", entity: "Audit Log", severity: "warning", details: "CSV export of full audit trail" });
-    const csv = exportAuditCSV();
+    const csv = exportAuditCSV(log);
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -596,32 +611,31 @@ export default function SecurityPage() {
     a.download = `audit-log-${new Date().toISOString().split("T")[0]}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    setLog(getAuditLog());
   };
 
-  const handleVerify = () => {
-    const result = verifyAuditIntegrity();
-    setIntegrity(result);
-    logAudit({
-      actor: "admin", actorId: "admin-001",
-      action: result.valid ? "audit_integrity_verified" : "audit_integrity_broken",
-      category: "security", entity: "Audit Log",
-      severity: result.valid ? "success" : "critical",
-      details: result.valid ? "Hash chain verified — no tampering detected" : `Tampering detected at entry ${result.brokenAt}`,
-    });
-    setLog(getAuditLog());
+  const handleVerify = async () => {
+    try {
+      const result = await fetchAuditIntegrity();
+      setIntegrity(result);
+      logAudit({
+        action: result.valid ? "audit_integrity_verified" : "audit_integrity_broken",
+        category: "security", entity: "Audit Log",
+        severity: result.valid ? "success" : "critical",
+        details: result.valid
+          ? `Hash chain verified across ${result.count} entries`
+          : `Tampering detected at entry ${result.brokenAt}: ${result.reason ?? "chain broken"}`,
+      });
+      await reload();
+    } catch (err) {
+      setLogError(err instanceof ApiError ? err.message : "Verification failed.");
+    }
   };
 
-  const handleClear = () => {
-    // clearAuditLog re-seeds the emptied chain with a genesis entry recording who
-    // cleared it, so the erasure stays auditable — read the log back rather than
-    // assuming it is empty.
-    const result = clearAuditLog(role ?? undefined, user?.name ?? "unknown", user?.id ?? "unknown");
-    if (!result.success) return;
-    setLog(getAuditLog());
-    setLiveStream([]);
-    setIntegrity(verifyAuditIntegrity());
-  };
+  // There is deliberately no "clear log" action any more. The trail is
+  // append-only on the server, and an operator who can erase their own audit
+  // history does not have one. The old button called into localStorage, which
+  // is exactly the property that made the previous implementation unusable as
+  // evidence.
 
   // ── Remediation: mark control as resolved ──────────────────────────
   const [resolvedActions, setResolvedActions] = useState<Set<string>>(new Set());
@@ -1374,9 +1388,9 @@ export default function SecurityPage() {
               <Button size="sm" variant="outline" onClick={handleExport}>
                 <Download className="h-4 w-4 mr-1.5" /> Export CSV
               </Button>
-              <Button size="sm" variant="destructive" onClick={handleClear}>
-                Clear Log
-              </Button>
+              <span className="text-xs text-muted-foreground flex items-center gap-1.5">
+                <Lock className="h-3.5 w-3.5" /> Append-only
+              </span>
             </div>
           </div>
         </CardHeader>

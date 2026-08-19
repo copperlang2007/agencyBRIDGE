@@ -6,16 +6,17 @@ project:
   production_url: https://agencybridge.vercel.app
 state:
   phase: "1"
-  status: quality-hardening-pending-security-architecture
+  status: backend-live-demo-gated-pending-claims-and-coverage
 next_action:
-  id: SEC-001
+  id: OPS-001
   description: >-
-    Resolve R-001. Either move authentication server-side (real backend verifying
-    credentials and issuing a session), or, if agencyBRIDGE is to remain a
-    mock-data demo, gate the public deployment behind Vercel password protection
-    and set robots noindex so a demo is not presented as a production system.
-    Requires an owner decision on which path; both are recorded in DECISIONS.md
-    as D-006 (undecided).
+    Set DATABASE_URL in the Vercel project's environment variables (R-012). It
+    cannot be set from the build environment, and until it is the API answers
+    503 not_configured on every request. Then run `npm run db:migrate` and
+    `npm run db:seed` against that database, and — only if real accounts are
+    wanted — re-run the seed with SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD set
+    to credentials the operator chooses. No real credential is generated,
+    printed, or stored by this repository.
 completed:
   - CONTRACT-001: Build Contract OS entrypoint, project contract, and state artifacts created
   - AUDIT-001: Tamper-evident audit chain rebuilt on synchronous SHA-256; 6 defects fixed, 15 regression tests
@@ -27,27 +28,38 @@ completed:
   - REVIEW-002: PR #4 review round 2 — 19 findings triaged; 12 real defects fixed with regression tests, 6 evidence/doc corrections, 1 recorded as R-010
   - REVIEW-003: PR #4 review round 3 — 9 findings on round 2's fixes; head-boundary gap in my own fix closed, all accepted
   - REVIEW-004: PR #4 review round 4 — 4 findings on round 3's fixes; cent round-trip and atomic log+boundary storage (D-009)
+  - REVIEW-005: PR #4 review round 5 — 2 documentation/test-hygiene findings; PR #4 merged to main
+  - BACKEND-001: Real backend — scrypt credential verification, DB-backed HttpOnly sessions, SQL-enforced scoping, Neon Postgres (D-010, D-011, D-012)
+  - DEMO-001: Gated read-only demo tenant; writes refused server-side; acknowledged entry; demo banner on every page (D-010)
+  - AUDIT-002: Audit chain moved to Postgres, appended and verified server-side; clearAuditLog removed (D-013)
+  - IMPERSONATION-001: Role switching moved server-side; effective identity resolved from the session row (D-014)
 gates:
   contract: established
   ip_reuse: inspected-bounded          # 1 of 88 portfolio repos scanned with evidence; see IP-MAP
   architecture: documented
   implementation: hardened
-  tests: 137-pass-narrow-coverage      # 5 of 14 lib modules covered; zero component tests
-  security: FAILED                     # R-001 client-side auth on a public deployment
+  tests: 132-pass-narrow-coverage      # security-critical logic covered; no handler or component tests (R-005)
+  security: server-enforced-claims-outstanding  # R-001/R-002/R-010 closed; R-003 copy still overstates
   redteam: partial                     # lib logic reviewed; 26 page components not reviewed
   brand: package-delivered-motion-absent
-  deployment: previously-verified-branch-not-deployed
+  deployment: verified-locally-needs-DATABASE_URL   # R-012
   evidence: recorded
 forge_gate:
   status: NOT_CLEAR
   blocking:
-    - R-001  # authentication is client-side only on a public production URL
-    - R-003  # "audit logging meeting CMS 42 CFR requirements" is not met by browser-local storage
-    - GATE-REDTEAM  # adversarial review has not covered the page layer
+    - R-003  # "audit logging meeting CMS 42 CFR requirements" still overstates the system
+    - R-012  # DATABASE_URL not set on the deployment; the API answers 503 until it is
+    - GATE-REDTEAM  # adversarial review has not covered the page layer or the API handlers
     - GATE-BRAND    # motion identity and owned social/OG assets outstanding
+  resolved_this_pass:
+    - R-001  # closed by D-010 — credentials verified server-side, sessions server-issued
+    - R-002  # closed by D-013 — the clear operation no longer exists
+    - R-010  # closed by D-013 — no client-side chain to race on
 last_verified: 2026-08-19
 last_agent: Claude Code (agencyBRIDGE quality pass)
 notes:
-  - HEAD verified against origin/main d76b293 before work began; local branch was stale and was reset.
+  - Branch restarted from origin/main 0d77ff4 (PR #4 merged) before this pass began.
+  - Neon project falling-dream-48302930, Postgres 18.4, pooler endpoint. Schema in db/schema.sql + db/constraints.sql; seed in db/seed.mjs.
+  - The demo tenant is the only tenant seeded by default. Real tenants require operator-chosen credentials.
   - agencyBRIDGE is absent from build-contract-os/registry/PROJECT-REGISTRY.yaml (see D-002).
   - Verification evidence is under contract/evidence/.
