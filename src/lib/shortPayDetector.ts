@@ -1,3 +1,5 @@
+import { csvRows } from "./csv";
+
 // Commission short-pay detection.
 //
 // Powers the public Short-Pay Detector on the landing page. Its output drives
@@ -154,13 +156,6 @@ export function analyzeCommissions(rows: CommissionRowInput[]): ShortPayResult {
   };
 }
 
-/** Quote a CSV cell and defuse anything a spreadsheet would treat as a formula. */
-export function csvCell(value: unknown): string {
-  let s = String(value ?? "");
-  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
-  return `"${s.replace(/"/g, '""')}"`;
-}
-
 /** Render the analysis as a CSV report. */
 export function buildShortPayCSV(result: ShortPayResult): string {
   const headers = ["Carrier", "Plan Type", "Expected ($)", "Paid ($)", "Variance ($)", "Classification"];
@@ -178,5 +173,5 @@ export function buildShortPayCSV(result: ShortPayResult): string {
     ["RECOMMENDATIONS"],
     ...result.recommendations.map((r, i) => [`${i + 1}. ${r}`]),
   ];
-  return [headers, ...rows, ...summaryRows].map((r) => r.map(csvCell).join(",")).join("\n");
+  return csvRows([headers, ...rows, ...summaryRows]);
 }

@@ -150,3 +150,31 @@ describe("audit log — CSV export", () => {
     expect(csv).not.toMatch(/,"=cmd/);
   });
 });
+
+describe("audit chain — truncation cannot be forged", () => {
+  // Raised in review: truncation is inferred from log[0].prevHash !== GENESIS,
+  // so does corrupting the head's prevHash get waved through as a benign
+  // retention rollover? prevHash is part of the hashed payload, so it should not.
+  it("corrupting the head entry's prevHash is tampering, not truncation", () => {
+    for (let i = 0; i < 3; i++) logAudit(entry(i));
+    const log = getAuditLog();
+    log[0].prevHash = "f".repeat(64);
+    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log));
+    expect(verifyAuditIntegrity()).toMatchObject({ valid: false, brokenAt: 0 });
+  });
+
+  it("a plausible-looking genesis substitute is still tampering", () => {
+    for (let i = 0; i < 3; i++) logAudit(entry(i));
+    const log = getAuditLog();
+    log[0].prevHash = "0".repeat(63) + "1"; // near-genesis, one nibble off
+    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log));
+    expect(verifyAuditIntegrity().valid).toBe(false);
+  });
+
+  it("truncation is only reported for a head whose own hash still verifies", () => {
+    for (let i = 0; i < 5; i++) logAudit(entry(i));
+    const trimmed = getAuditLog().slice(2);
+    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(trimmed));
+    expect(verifyAuditIntegrity()).toMatchObject({ valid: true, truncated: true });
+  });
+});

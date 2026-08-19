@@ -11,6 +11,7 @@
 // before this constitutes an audit trail of record.
 
 import { sha256Hex } from "./sha256";
+import { csvCell } from "./csv";
 
 export type AuditSeverity = "info" | "warning" | "critical" | "success";
 export type AuditCategory =
@@ -246,13 +247,6 @@ export function verifyAuditIntegrity(): AuditIntegrityResult {
   }
 
   return { valid: true, brokenAt: null, truncated };
-}
-
-/** Fields that a spreadsheet would evaluate as a formula if left unescaped. */
-function csvCell(value: unknown): string {
-  let s = String(value ?? "");
-  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
-  return `"${s.replace(/"/g, '""')}"`;
 }
 
 /** Export log as CSV (SOC 2 evidence artifact). */
