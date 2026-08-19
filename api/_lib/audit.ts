@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { query, queryOne } from "./db.js";
+import { badRequest } from "./http.js";
 import {
   chainHash,
   GENESIS_HASH,
+  isAuditCategory,
+  isAuditSeverity,
   verifyChain,
   type ChainIntegrityResult,
   type ChainRecord,
@@ -279,4 +282,64 @@ export async function verifyAudit(tenantId: string): Promise<ChainIntegrityResul
   }
 
   return { ...result, count: entries.length };
+}
+
+/** Ceiling on one batch of client-supplied appends. */
+export const MAX_CLIENT_BATCH = 25;
+
+function str(v: unknown, fallback = ""): string {
+  return typeof v === "string" && v.length > 0 ? v : fallback;
+}
+
+/**
+ * Appends entries a client submitted, under the caller's own identity.
+ *
+ * Shared by `POST /api/audit` and by sign-out, which carries whatever the
+ * client had left over in the same request that revokes the session. One
+ * implementation because they must apply the same rules: a category the batch
+ * endpoint rejects cannot be one sign-out quietly accepts.
+ *
+ * Actor, session and network identity come from the session, never from the
+ * body. A client that could name its own actor could write entries attributing
+ * its actions to somebody else, which would make the trail worse than no trail.
+ */
+export async function appendClientEntries(
+  session: { tenantId: string; sessionId: string; realName: string; realUserId: string; name: string; role: string; isImpersonating: boolean },
+  items: unknown[],
+  ipAddress: string,
+  userAgent: string,
+): Promise<number[]> {
+  if (items.length > MAX_CLIENT_BATCH) {
+    throw badRequest(`At most ${MAX_CLIENT_BATCH} entries per request.`);
+  }
+
+  const who = actorFor(session);
+  const written: number[] = [];
+
+  for (const item of items) {
+    if (!item || typeof item !== "object") throw badRequest("Each entry must be an object.");
+    const e = item as Record<string, unknown>;
+
+    const category = str(e.category, "system");
+    const severity = str(e.severity, "info");
+    if (!isAuditCategory(category)) throw badRequest(`Unknown audit category "${category}".`);
+    if (!isAuditSeverity(severity)) throw badRequest(`Unknown audit severity "${severity}".`);
+
+    const { seq } = await appendAudit(session.tenantId, {
+      actor: who.actor,
+      actorId: who.actorId,
+      action: str(e.action, "UNKNOWN"),
+      category,
+      entity: str(e.entity, "unknown"),
+      entityId: str(e.entityId, "-"),
+      severity,
+      details: str(e.details) + who.suffix,
+      sessionId: session.sessionId,
+      ipAddress,
+      userAgent,
+    });
+    written.push(seq);
+  }
+
+  return written;
 }

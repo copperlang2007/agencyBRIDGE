@@ -238,6 +238,20 @@ export function logAudit(params: {
 }
 
 /**
+ * Hands the caller what is queued and clears the queue in the same step.
+ *
+ * Sign-out uses this to carry its leftovers in the request that revokes the
+ * session, so there is no interval between delivering them and the cookie they
+ * are authenticated by going away. Capped at what one request may carry; the
+ * remainder is dropped, which is the loss recorded as R-031.
+ */
+export function takeAuditQueue(): AuditAppend[] {
+  const pending = queue.slice(0, MAX_BATCH);
+  discardAuditQueue();
+  return pending;
+}
+
+/**
  * Drops anything still queued.
  *
  * Called at sign-out, after a final flush attempt. Entries name no actor — the
@@ -259,13 +273,24 @@ export function discardAuditQueue(): void {
   writeOutbox(queue);
 }
 
-/** Sends anything buffered right now. Used before navigating away. */
+/** Sends anything buffered right now, without waiting for the batch window. */
 export function flushAuditLog(): Promise<void> {
   if (timer !== null) {
     clearTimeout(timer);
     timer = null;
   }
   return flush();
+}
+
+// Leaving the page is the last chance to deliver. Without this the entries
+// survive — the outbox is written on every change — but they sit there until
+// somebody opens the app again, which for a closed tab may be never.
+// `pagehide` rather than `beforeunload`: it fires for the bfcache and on
+// mobile, where `beforeunload` frequently does not.
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => {
+    void flushAuditLog();
+  });
 }
 
 // Anything recovered from a previous page load is sent without waiting for the

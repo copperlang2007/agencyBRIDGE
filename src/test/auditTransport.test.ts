@@ -245,3 +245,38 @@ describe("sign-out", () => {
     expect(settled).toBe(true);
   });
 });
+
+describe("takeAuditQueue", () => {
+  it("hands over what is queued and empties the queue in one step", async () => {
+    // Sign-out carries these in the request that revokes the session, so the
+    // handover and the clear cannot be two steps with a gap between them.
+    const { logAudit, takeAuditQueue, pendingAuditCount } = await freshModule();
+    logAudit({ action: "A", category: "client", entity: "e", entityId: "1" });
+    logAudit({ action: "B", category: "client", entity: "e", entityId: "2" });
+
+    const taken = takeAuditQueue();
+
+    expect(taken.map((e) => e.entityId)).toEqual(["1", "2"]);
+    expect(pendingAuditCount()).toBe(0);
+  });
+
+  it("invalidates a request already in flight, like any other discard", async () => {
+    const { logAudit, flushAuditLog, takeAuditQueue, pendingAuditCount } = await freshModule();
+
+    let release: (v: { written: number }) => void = () => {};
+    appendAudit.mockImplementationOnce(
+      () => new Promise((resolve) => { release = resolve; }),
+    );
+
+    logAudit({ action: "A", category: "client", entity: "e", entityId: "old" });
+    const inFlight = flushAuditLog();
+
+    takeAuditQueue();
+    logAudit({ action: "B", category: "client", entity: "e", entityId: "new" });
+
+    release({ written: 1 });
+    await inFlight;
+
+    expect(pendingAuditCount()).toBe(1);
+  });
+});

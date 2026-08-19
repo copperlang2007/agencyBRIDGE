@@ -9,16 +9,10 @@ import {
   withErrors,
 } from "../_lib/http.js";
 import { requireAction, requireSameOrigin, requireUser } from "../_lib/auth.js";
-import { actorFor, appendAudit, listAudit } from "../_lib/audit.js";
-import { isAuditCategory, isAuditSeverity } from "../../src/lib/auditChain.js";
+import { appendClientEntries, listAudit } from "../_lib/audit.js";
 
-/** Ceiling on one page of entries, and on one batch of appends. */
+/** Ceiling on one page of entries. */
 const MAX_LIMIT = 500;
-const MAX_BATCH = 25;
-
-function str(v: unknown, fallback = ""): string {
-  return typeof v === "string" && v.length > 0 ? v : fallback;
-}
 
 export default withErrors(async (req: VercelRequest, res: VercelResponse) => {
   const method = requireMethod(req, ["GET", "POST"]);
@@ -44,44 +38,11 @@ export default withErrors(async (req: VercelRequest, res: VercelResponse) => {
   const body = jsonBody(req);
   const items = Array.isArray(body.entries) ? body.entries : [body];
   if (items.length === 0) throw badRequest("No entries supplied.");
-  if (items.length > MAX_BATCH) throw badRequest(`At most ${MAX_BATCH} entries per request.`);
 
-  const ip = clientIp(req);
-  const ua = userAgent(req);
-  const who = actorFor(session);
-  const written: number[] = [];
-
-  for (const item of items) {
-    if (!item || typeof item !== "object") throw badRequest("Each entry must be an object.");
-    const e = item as Record<string, unknown>;
-
-    const category = str(e.category, "system");
-    const severity = str(e.severity, "info");
-    if (!isAuditCategory(category)) throw badRequest(`Unknown audit category "${category}".`);
-    if (!isAuditSeverity(severity)) throw badRequest(`Unknown audit severity "${severity}".`);
-
-    // Actor, session and network identity come from the session, never from the
-    // request body. A client that could name its own actor could write entries
-    // attributing its actions to somebody else — which would make the trail
-    // worse than no trail.
-    written.push(
-      (
-        await appendAudit(session.tenantId, {
-          actor: who.actor,
-          actorId: who.actorId,
-          action: str(e.action, "UNKNOWN"),
-          category,
-          entity: str(e.entity, "unknown"),
-          entityId: str(e.entityId, "-"),
-          severity,
-          details: str(e.details) + who.suffix,
-          sessionId: session.sessionId,
-          ipAddress: ip,
-          userAgent: ua,
-        })
-      ).seq,
-    );
-  }
+  // Validation, attribution and the batch ceiling live in one place, shared
+  // with sign-out, which delivers whatever is left over in the same request
+  // that revokes the session.
+  const written = await appendClientEntries(session, items, clientIp(req), userAgent(req));
 
   send(res, 201, { written: written.length, seq: written });
 });

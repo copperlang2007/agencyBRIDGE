@@ -39,7 +39,7 @@ gates:
   ip_reuse: inspected-bounded          # 1 of 88 portfolio repos scanned with evidence; see IP-MAP
   architecture: documented
   implementation: hardened
-  tests: 145-pass-narrow-coverage      # security-critical logic and the audit transport covered; no handler or component tests (R-005)
+  tests: 147-pass-narrow-coverage      # security-critical logic and the audit transport covered; no handler or component tests (R-005)
   security: server-enforced-claims-outstanding  # R-001/R-002/R-010 closed; R-003 copy still overstates
   redteam: partial                     # lib logic reviewed; 26 page components not reviewed
   brand: package-delivered-motion-absent

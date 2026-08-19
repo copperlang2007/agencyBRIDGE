@@ -1,6 +1,6 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { api, ApiError } from "@/lib/api";
-import { discardAuditQueue, flushAuditLog, logAudit } from "@/lib/auditLog";
+import { logAudit, takeAuditQueue } from "@/lib/auditLog";
 import {
   actionPermissions,
   getImpersonatableRoles,
@@ -76,19 +76,6 @@ export function RoleProvider({ children }: { children: ReactNode }) {
   const [isDemo, setIsDemo] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  /**
-   * A sign-out that has not finished revoking yet.
-   *
-   * Sign-out cannot revoke first: the entries it still has to deliver are
-   * authenticated by the very cookie the revoke destroys. So there is a window
-   * where the UI shows the login screen while a valid cookie is still on its
-   * way to `/api/auth/logout`. Authenticating inside that window replaces the
-   * cookie, and the revoke — which names no session, only "whoever is calling"
-   * — then lands on the session that was just created. `login` and `enterDemo`
-   * wait this out rather than racing it.
-   */
-  const pendingLogout = useRef<Promise<void> | null>(null);
-
   /** Pulls the session from the server; the single place identity is set. */
   const refresh = useCallback(async () => {
     try {
@@ -115,7 +102,6 @@ export function RoleProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const login = useCallback(async (email: string, password: string): Promise<AuthResult> => {
-    await pendingLogout.current;
     try {
       const result = await api.login(email, password);
       setUser(result.user);
@@ -134,7 +120,6 @@ export function RoleProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const enterDemo = useCallback(async (role: RoleId): Promise<AuthResult> => {
-    await pendingLogout.current;
     try {
       const result = await api.enterDemo(role);
       setUser(result.user);
@@ -155,25 +140,25 @@ export function RoleProvider({ children }: { children: ReactNode }) {
     setOriginalUser(null);
     setIsDemo(false);
 
-    const run = (async () => {
-      // Deliver what this session recorded while its cookie is still valid,
-      // revoke, then drop anything that did not make it. Entries carry no
-      // actor — the server attributes them to whoever is signed in when they
-      // arrive — so leftovers delivered after the next sign-in would be
-      // recorded against the wrong person. The discard is unconditional for
-      // the same reason: a failed revoke leaves entries the client can no
-      // longer prove belong to anybody, and a gap in the trail is a better
-      // outcome than an entry filed under the wrong name (R-031).
-      await flushAuditLog().catch(() => undefined);
-      await api.logout().catch(() => undefined);
-      discardAuditQueue();
-    })();
-
-    pendingLogout.current = run;
-    void run.finally(() => {
-      if (pendingLogout.current === run) pendingLogout.current = null;
-    });
-    return run;
+    // One request, issued here in the handler, carrying both the leftover
+    // entries and the revoke.
+    //
+    // It was two: deliver, then revoke. The browser attaches the cookie when a
+    // request is *issued*, so the revoke went out with whatever cookie existed
+    // once the delivery came back — and a sign-in during that gap, in this tab
+    // or another, replaced it. The revoke then ended the session that had just
+    // been created. Gating sign-in on the sign-out finishing would fix only
+    // this tab, and would hang the login form if either request stalled.
+    // Sending one request removes the interval instead of guarding it.
+    //
+    // The queue is taken, not flushed: entries carry no actor, so a leftover
+    // delivered under the next session would be recorded against the wrong
+    // person. Anything beyond one request's worth is dropped rather than
+    // retained, and a gap is a better failure than a misattribution (R-031).
+    return api
+      .logout(takeAuditQueue())
+      .then(() => undefined)
+      .catch(() => undefined);
   }, []);
 
   /**

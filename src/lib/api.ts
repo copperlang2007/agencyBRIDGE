@@ -111,7 +111,8 @@ export const api = {
   enterDemo: (role: RoleId) =>
     post<{ user: UserInfo; demo: boolean }>("/api/auth/demo", { role, acknowledged: true }),
 
-  logout: () => post<{ ok: true }>("/api/auth/logout"),
+  /** Carries any undelivered audit entries, so the revoke is one request, not two. */
+  logout: (entries: AuditAppend[] = []) => post<{ ok: true }>("/api/auth/logout", { entries }),
 
   switchRole: (role: RoleId | null) =>
     post<{ ok: true; impersonating: boolean }>("/api/auth/switch-role", { role }),

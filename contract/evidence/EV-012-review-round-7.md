@@ -108,3 +108,52 @@ npm test            145 passed (10 files)     was 143; +2 transport races
 npm run build       clean
 node scripts/assert-spa-rewrite.mjs   OK
 ```
+
+---
+
+# Round 8 — the gate was the wrong shape
+
+cubic's review of `7181660` found two more, both on the fix above.
+
+**The gate only covered one tab** (P1). `pendingLogout` is a ref inside one
+`RoleProvider`. A sign-in in *another* tab during this tab's flush still lands
+inside the window, because the cookie is shared across tabs and the ref is not.
+
+**A hung request blocked sign-in indefinitely** (P2). `await
+pendingLogout.current` has no timeout, so an append or revoke that never
+settles leaves the login form waiting until the page is reloaded.
+
+Both are true, and both are consequences of guarding the window rather than
+removing it. The window exists because sign-out was two round trips and **the
+browser attaches the cookie when a request is issued** — so the revoke went out
+with whatever cookie existed once the delivery came back.
+
+Sign-out is now **one request**. `POST /api/auth/logout` carries the leftover
+entries in its body; the server appends them under the session it is about to
+revoke, then revokes. The request is issued synchronously in the click handler,
+with this session's cookie, and there is no interval left for a sign-in to
+occupy — in this tab or any other. `pendingLogout` and both `await` gates are
+gone, so the hang has nothing to hang on.
+
+Validation, attribution and the batch ceiling moved into
+`appendClientEntries`, shared by `POST /api/audit` and by sign-out, because a
+category one rejects must not be one the other quietly accepts. The delivery is
+best-effort inside logout: a malformed entry must not stop somebody signing out.
+
+Two consequences worth stating rather than leaving to be discovered:
+
+- **Entries beyond one request's worth are dropped**, as they were before. That
+  is the same loss already recorded as R-031, not a new one.
+- **`flushAuditLog` had become dead production code** — after this change
+  nothing but its own tests called it, while its comment claimed it was "used
+  before navigating away". Nothing did that. It is now wired to `pagehide`,
+  which makes the claim true and closes a real gap: entries queued when a tab
+  closes previously waited for somebody to open the app again. `pagehide`
+  rather than `beforeunload` because it fires for the bfcache and on mobile.
+
+```
+npm run typecheck   clean
+npm test            147 passed (10 files)     +2 for takeAuditQueue
+npm run build       clean
+node scripts/assert-spa-rewrite.mjs   OK
+```
