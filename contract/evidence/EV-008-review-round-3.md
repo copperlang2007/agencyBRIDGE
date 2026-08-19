@@ -29,9 +29,6 @@ attacker deletes the retained head        -> { valid: false, brokenAt: 0 }      
 two successive real rollovers             -> { valid: true,  truncated: true }    correct
 ```
 
-The boundary is also written **after** the log write succeeds, so a failed write
-cannot leave a marker claiming a rollover that never happened.
-
 ## Other findings, all accepted
 
 | Severity | Finding | Fix |

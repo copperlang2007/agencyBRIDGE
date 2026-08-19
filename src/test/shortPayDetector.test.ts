@@ -89,7 +89,7 @@ describe("parseCurrency", () => {
 
   it("every accepted amount round-trips to its exact cents", () => {
     const samples = [
-      "0", "0.01", "0.99", "1", "1.005".slice(0, 4), "19.99", "450.00", "1234.56",
+      "0", "0.01", "0.99", "1", "1.00", "19.99", "450.00", "1234.56",
       "999999.99", "1000000.00", "12345678.90", "1000000000.01",
     ];
     for (const s of samples) {
