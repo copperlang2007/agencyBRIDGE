@@ -291,6 +291,67 @@ function str(v: unknown, fallback = ""): string {
   return typeof v === "string" && v.length > 0 ? v : fallback;
 }
 
+export interface PreparedEntry {
+  action: string;
+  category: string;
+  entity: string;
+  entityId: string;
+  severity: string;
+  details: string;
+}
+
+/**
+ * `details` with the impersonation suffix, and the suffix kept whole.
+ *
+ * The suffix is the only record of who was *really* acting when a session is
+ * viewing the product as somebody else, so it is the last thing that may be
+ * cut. Appending it and clamping afterwards cut exactly that: 500 characters of
+ * caller-supplied detail pushed the accountability off the end, leaving an
+ * entry that reads as if the impersonated user had acted alone.
+ */
+export function detailsWithSuffix(details: string, suffix: string): string {
+  const room = Math.max(0, MAX_FIELD - suffix.length);
+  return details.slice(0, room) + suffix.slice(0, MAX_FIELD);
+}
+
+/**
+ * Validates a whole batch before any of it is written.
+ *
+ * Validation and insertion used to be interleaved, so a batch whose second
+ * entry was invalid committed the first and then answered 400 — and the client
+ * treats 400 as "this will never be accepted" and drops the batch. One request
+ * left one entry in the chain and silently lost the rest. Nothing is appended
+ * until every entry has passed.
+ *
+ * This closes the validation case, not every case: the appends that follow are
+ * still separate statements, so a database failure part-way through a batch
+ * leaves it partly written (R-015).
+ */
+export function prepareClientEntries(items: unknown[], suffix: string): PreparedEntry[] {
+  if (items.length > MAX_CLIENT_BATCH) {
+    throw badRequest(`At most ${MAX_CLIENT_BATCH} entries per request.`);
+  }
+
+  return items.map((item) => {
+    if (!item || typeof item !== "object") throw badRequest("Each entry must be an object.");
+    const e = item as Record<string, unknown>;
+
+    const category = str(e.category, "system");
+    const severity = str(e.severity, "info");
+    if (!isAuditCategory(category)) throw badRequest(`Unknown audit category "${category}".`);
+    if (!isAuditSeverity(severity)) throw badRequest(`Unknown audit severity "${severity}".`);
+
+    return {
+      action: str(e.action, "UNKNOWN"),
+      category,
+      entity: str(e.entity, "unknown"),
+      entityId: str(e.entityId, "-"),
+      severity,
+      details: detailsWithSuffix(str(e.details), suffix),
+    };
+  });
+}
+
 /**
  * Appends entries a client submitted, under the caller's own identity.
  *
@@ -309,31 +370,18 @@ export async function appendClientEntries(
   ipAddress: string,
   userAgent: string,
 ): Promise<number[]> {
-  if (items.length > MAX_CLIENT_BATCH) {
-    throw badRequest(`At most ${MAX_CLIENT_BATCH} entries per request.`);
-  }
-
   const who = actorFor(session);
+
+  // Every entry is checked before any of them is written — see
+  // `prepareClientEntries`.
+  const prepared = prepareClientEntries(items, who.suffix);
   const written: number[] = [];
 
-  for (const item of items) {
-    if (!item || typeof item !== "object") throw badRequest("Each entry must be an object.");
-    const e = item as Record<string, unknown>;
-
-    const category = str(e.category, "system");
-    const severity = str(e.severity, "info");
-    if (!isAuditCategory(category)) throw badRequest(`Unknown audit category "${category}".`);
-    if (!isAuditSeverity(severity)) throw badRequest(`Unknown audit severity "${severity}".`);
-
+  for (const entry of prepared) {
     const { seq } = await appendAudit(session.tenantId, {
       actor: who.actor,
       actorId: who.actorId,
-      action: str(e.action, "UNKNOWN"),
-      category,
-      entity: str(e.entity, "unknown"),
-      entityId: str(e.entityId, "-"),
-      severity,
-      details: str(e.details) + who.suffix,
+      ...entry,
       sessionId: session.sessionId,
       ipAddress,
       userAgent,

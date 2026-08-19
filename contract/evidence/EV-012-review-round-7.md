@@ -157,3 +157,100 @@ npm test            147 passed (10 files)     +2 for takeAuditQueue
 npm run build       clean
 node scripts/assert-spa-rewrite.mjs   OK
 ```
+
+---
+
+# Round 9 — five more, and a claim of mine that was too strong
+
+cubic's review of `79f5d31` found five. All five are real, and one of them
+contradicts something I wrote in round 8.
+
+## The correction first
+
+Round 8 said sign-out as one request left "no interval to race". That is true of
+**which session gets revoked** — the revoke names the token the request arrived
+with, so it always targets the old session — and it is *not* true of the
+cookie-clearing header, which I did not think about. `Set-Cookie` clears
+whatever cookie the browser holds **when the response lands**, not the one the
+request carried. Sign out, sign in before the response returns, and the clear
+erased the session that had just been issued. Issuing the request first fixed
+the revoke; it never controlled the header.
+
+**The cookie is now cleared only when the revoke failed.** A revoked token is
+inert — `currentSession` finds no live row for it — so clearing it is hygiene
+rather than security, and not sending the header is what makes a concurrent
+sign-in survive. When the revoke *fails* the token may still authenticate, and
+leaving the caller signed in is the worse failure, so the cookie goes; that can
+still clobber a concurrent sign-in, which now needs a failed revoke **and** a
+sign-in in the same window. Recorded as **R-032** rather than described as
+solved.
+
+## A malformed body left the session alive
+
+`jsonBody` throws a 400. Thrown from the delivery step it ended the request
+before `revokeSession` ran, so a client that sent a body which would not parse
+came away looking signed out — the cookie was cleared first — with its session
+still live on the server. Parsing is now inside the best-effort path, and the
+revoke runs regardless. Signing out is the point of the request; the entries are
+cargo.
+
+## Half a batch, then a 400
+
+`appendClientEntries` validated and inserted in one loop, so a batch whose
+second entry was invalid committed the first and then answered 400 — and the
+client treats 400 as "this will never be accepted" and drops the batch. One
+request left one entry in the chain and silently lost the rest. Validation is
+now a separate pass over the whole batch (`prepareClientEntries`) and nothing is
+appended until every entry has passed.
+
+This closes the validation case, not every case. The appends are still separate
+statements, so a database failure part-way through a batch still leaves it
+partly written — that is R-015, unchanged, and it is stated rather than folded
+into this fix.
+
+## The suffix that records who was really acting
+
+`details: str(e.details) + who.suffix` was clamped to 500 afterwards, so 500
+characters of caller-supplied detail pushed the suffix off the end. The entry
+then read as though the impersonated user had acted alone — losing the one fact
+the suffix exists to preserve, and losing it precisely when a caller supplies
+enough text to cause it. `detailsWithSuffix` reserves the suffix's room first.
+
+## Sign-out delivered in-flight entries twice
+
+`send` slices its batch but leaves it in the queue until the server answers, so
+those entries sit there for the whole request. `takeAuditQueue` sliced from the
+front, so signing out during an open append handed that request's own entries to
+the logout request as well — and the server appends both. One action, two rows,
+each hashing correctly, and verification passes: indistinguishable from two
+things having happened. That is worse than losing them, because a gap is visible
+as a gap. `takeAuditQueue` now skips whatever is on the wire.
+
+If that open request then fails, its entries are lost. That is the R-031 trade
+taken again, deliberately, over delivering an entry twice.
+
+## Tests
+
+Two of the five are pinned by tests checked against the defect:
+
+| Defect reinstated | Result |
+|---|---|
+| `takeAuditQueue` slices from the front | fails — `expected [ 'on-the-wire', 'still-queued' ] to deeply equal [ 'still-queued' ]` |
+| suffix appended then clamped | fails — `keeps the impersonation suffix when details fill the field` |
+
+`prepareClientEntries` is covered by seven cases in a new `auditIntake` suite,
+but its guarantee is structural rather than behavioural: the function is pure
+and throws before `appendClientEntries` reaches its append loop, so there is no
+interleaved version left to reinstate. That is a weaker form of evidence than
+the two above and is worth naming as such.
+
+The two logout fixes have **no automated test**. They live in a handler, and a
+handler suite needs a database in CI (R-005). They were derived by reading the
+control flow, and that is the whole of their evidence.
+
+```
+npm run typecheck   clean
+npm test            159 passed (11 files)     +12; new auditIntake suite
+npm run build       clean
+node scripts/assert-spa-rewrite.mjs   OK
+```

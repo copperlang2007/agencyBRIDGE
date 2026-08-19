@@ -122,6 +122,18 @@ let inFlight: Promise<void> | null = null;
  */
 let generation = 0;
 
+/**
+ * How many entries at the head of the queue are already on the wire.
+ *
+ * `send` slices its batch but does not remove it until the server answers, so
+ * those entries sit in `queue` for the whole request. Sign-out takes from the
+ * queue directly, and without this it handed the open request's own entries to
+ * the logout request as well — two rows in a tamper-evident chain for one
+ * action, each hashing correctly, indistinguishable from two things having
+ * happened. A duplicate there is worse than a gap: a gap is visible as a gap.
+ */
+let inFlightCount = 0;
+
 /** How many entries one request may carry; the server rejects more. */
 const MAX_BATCH = 25;
 
@@ -142,6 +154,7 @@ const MAX_BATCH = 25;
 async function send(): Promise<void> {
   const gen = generation;
   const batch = queue.slice(0, MAX_BATCH);
+  inFlightCount = batch.length;
   try {
     await api.appendAudit(batch);
     if (gen !== generation) return;
@@ -170,6 +183,8 @@ async function send(): Promise<void> {
       writeOutbox(queue);
       failures = 0;
     }
+  } finally {
+    inFlightCount = 0;
   }
 }
 
@@ -242,11 +257,16 @@ export function logAudit(params: {
  *
  * Sign-out uses this to carry its leftovers in the request that revokes the
  * session, so there is no interval between delivering them and the cookie they
- * are authenticated by going away. Capped at what one request may carry; the
- * remainder is dropped, which is the loss recorded as R-031.
+ * are authenticated by going away. Capped at what one request may carry, and
+ * excluding anything already on the wire; the remainder is dropped, and if the
+ * open request then fails its entries are lost with it. Both are the loss
+ * recorded as R-031, taken deliberately over delivering an entry twice.
  */
 export function takeAuditQueue(): AuditAppend[] {
-  const pending = queue.slice(0, MAX_BATCH);
+  // Skips whatever a request already in flight is carrying. Those entries are
+  // still in the queue — they leave it only when the server answers — and
+  // handing them over again would deliver each one twice.
+  const pending = queue.slice(inFlightCount, inFlightCount + MAX_BATCH);
   discardAuditQueue();
   return pending;
 }

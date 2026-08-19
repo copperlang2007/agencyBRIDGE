@@ -10,12 +10,6 @@ export default withErrors(async (req: VercelRequest, res: VercelResponse) => {
 
   const token = readCookie(req, SESSION_COOKIE);
 
-  // Cleared before any database call. If the revoke below fails, the caller
-  // must still end up signed out locally — a logout that throws and leaves the
-  // cookie in place restores the session on the next refresh, which is the
-  // opposite of what was asked for.
-  clearSessionCookie(res);
-
   const session = await currentSession(req);
 
   const ip = clientIp(req);
@@ -34,8 +28,18 @@ export default withErrors(async (req: VercelRequest, res: VercelResponse) => {
   //
   // Best-effort: a malformed entry must not stop somebody signing out.
   if (session) {
-    const body = jsonBody(req);
-    const items = Array.isArray(body.entries) ? (body.entries as unknown[]) : [];
+    let items: unknown[] = [];
+    try {
+      const body = jsonBody(req);
+      if (Array.isArray(body.entries)) items = body.entries as unknown[];
+    } catch (err) {
+      // A body that will not parse must not stop the revoke below. `jsonBody`
+      // throws a 400, and thrown from here it ended the request before the
+      // session was revoked — so a malformed body left the caller looking
+      // signed out with a session still live on the server. Signing out is the
+      // point of this request; the entries are cargo.
+      console.error("audit delivery on logout could not parse the body", err);
+    }
     if (items.length > 0) {
       try {
         await appendClientEntries(session, items, ip, ua);
@@ -47,7 +51,32 @@ export default withErrors(async (req: VercelRequest, res: VercelResponse) => {
 
   // Revoked server-side as well, not just dropped client-side: clearing the
   // cookie alone would leave a token that still authenticates if captured.
-  if (token) await revokeSession(token);
+  let revoked = false;
+  if (token) {
+    try {
+      await revokeSession(token);
+      revoked = true;
+    } catch (err) {
+      console.error("session revoke failed", err);
+    }
+  }
+
+  // The cookie is cleared only when the token could *not* be revoked.
+  //
+  // A revoked token is inert — `currentSession` finds no live row for it — so
+  // clearing it is hygiene rather than security, and the header is not free:
+  // it clears whatever cookie the browser holds when the response lands, not
+  // the one this request arrived with. Sign out, then sign in before this
+  // response returns, and the clear erased the session that had just been
+  // issued. Issuing this request first, as the client now does, fixes *which
+  // session gets revoked* — it does not control which cookie a late response
+  // wipes. Not sending the header is what does.
+  //
+  // When the revoke failed the token may still authenticate, and leaving the
+  // caller signed in is the worse failure, so the cookie goes. That can still
+  // clobber a concurrent sign-in; it needs a failed revoke and a sign-in inside
+  // the same window, and between the two outcomes this is the right one.
+  if (!revoked) clearSessionCookie(res);
 
   if (session) {
     const who = actorFor(session);

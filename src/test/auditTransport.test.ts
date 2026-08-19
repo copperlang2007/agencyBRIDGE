@@ -260,6 +260,35 @@ describe("takeAuditQueue", () => {
     expect(pendingAuditCount()).toBe(0);
   });
 
+  it("does not hand over entries a request in flight is already delivering", async () => {
+    // `send` slices its batch but leaves it in the queue until the server
+    // answers. Taking from the front while that request is open handed the same
+    // entries to the logout request too, and the server appends both — one
+    // action, two rows, each hashing correctly. In a tamper-evident chain that
+    // is worse than losing them: a gap is visible as a gap.
+    const { logAudit, flushAuditLog, takeAuditQueue } = await freshModule();
+
+    let release: (v: { written: number }) => void = () => {};
+    appendAudit.mockImplementationOnce(
+      () => new Promise((resolve) => { release = resolve; }),
+    );
+
+    logAudit({ action: "A", category: "client", entity: "e", entityId: "on-the-wire" });
+    const inFlight = flushAuditLog();
+    logAudit({ action: "B", category: "client", entity: "e", entityId: "still-queued" });
+
+    const taken = takeAuditQueue();
+
+    // The open request carries "on-the-wire"; sign-out must carry only the rest.
+    expect(taken.map((e) => e.entityId)).toEqual(["still-queued"]);
+
+    release({ written: 1 });
+    await inFlight;
+
+    const sent = appendAudit.mock.calls.flatMap((c) => c[0] as { entityId: string }[]);
+    expect(sent.map((e) => e.entityId)).toEqual(["on-the-wire"]);
+  });
+
   it("invalidates a request already in flight, like any other discard", async () => {
     const { logAudit, flushAuditLog, takeAuditQueue, pendingAuditCount } = await freshModule();
 
