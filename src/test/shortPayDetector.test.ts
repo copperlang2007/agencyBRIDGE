@@ -39,6 +39,25 @@ describe("parseCurrency", () => {
     expect(parseCurrency("   ")).toEqual({ value: 0, valid: true });
   });
 
+  // Raised in review: rounding a third decimal place erases a real difference,
+  // and an astronomically large amount overflows the cent conversion.
+  it("rejects amounts with more than two real decimal places", () => {
+    for (const bad of ["450.004", "450.001", "1.234", "0.005"]) {
+      expect(parseCurrency(bad).valid, bad).toBe(false);
+    }
+  });
+
+  it("accepts trailing-zero padding beyond two decimals", () => {
+    expect(parseCurrency("450.000")).toEqual({ value: 450, valid: true });
+    expect(parseCurrency("450.5000").value).toBe(450.5);
+  });
+
+  it("rejects amounts too large for exact cent arithmetic", () => {
+    expect(parseCurrency("1e308").valid).toBe(false); // not a currency literal anyway
+    expect(parseCurrency("999999999999999999").valid).toBe(false);
+    expect(parseCurrency("90071992547409").valid).toBe(true); // just inside the safe range
+  });
+
   it("G2: unparseable input is reported invalid rather than silently zeroed", () => {
     for (const bad of ["abc", "4.5.6", "12-34", "$", ".", "1,2,3.4.5"]) {
       expect(parseCurrency(bad).valid, bad).toBe(false);

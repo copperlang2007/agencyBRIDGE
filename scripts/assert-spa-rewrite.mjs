@@ -26,9 +26,18 @@ try {
 
 // Deep links must fall through to the shell.
 const mustMatch = ["/login", "/clients", "/reconciliation", "/agents/agt-1", "/a/b/c"];
-// Hashed assets must not: a missing asset should 404, not return HTML that the
-// browser then rejects on MIME type.
-const mustNotMatch = ["/assets/index-abc123.js", "/assets/style-def456.css"];
+// Nothing under /assets/ may: a missing asset should 404, not return HTML that
+// the browser then rejects on MIME type. Lazy route chunks and non-JS assets are
+// listed explicitly, so a rule narrowed to just the entry bundle fails here.
+const mustNotMatch = [
+  "/assets/index-abc123.js",
+  "/assets/Dashboard-9f8e7d.js",        // lazy route chunk
+  "/assets/ReconciliationPage-0a1b2c.js",
+  "/assets/style-def456.css",
+  "/assets/logo-112233.svg",
+  "/assets/font-445566.woff2",
+  "/assets/nested/deep-778899.js",
+];
 
 const failures = [
   ...mustMatch.filter((p) => !pattern.test(p)).map((p) => `should rewrite but does not: ${p}`),

@@ -9,7 +9,7 @@ import { RoleGuard } from "@/components/shared/RoleGuard";
 import LoginPage from "@/pages/LoginPage";
 import LandingPage from "@/pages/LandingPage";
 import { ErrorBoundary } from "@/components/shared/ErrorBoundary";
-import { RouteErrorBoundary } from "@/components/shared/RouteErrorBoundary";
+import { RouteErrorBoundary, StaticErrorBoundary } from "@/components/shared/RouteErrorBoundary";
 import type { ReactNode } from "react";
 import { useState, useEffect, lazy, Suspense } from "react";
 import NotFound from "./pages/NotFound";
@@ -111,11 +111,11 @@ function AuthenticatedApp() {
   if (isAuthenticated) {
     if (!onboardingDone) {
       return (
-        <RouteErrorBoundary routeKey="onboarding">
+        <StaticErrorBoundary routeKey="onboarding">
           <Suspense fallback={<RouteFallback />}>
             <OnboardingWizard />
           </Suspense>
-        </RouteErrorBoundary>
+        </StaticErrorBoundary>
       );
     }
 
@@ -129,7 +129,7 @@ function AuthenticatedApp() {
               element={
                 <AppLayout>
                   <RoleGuard route={r.path}>
-                    <RouteErrorBoundary routeKey={r.path}>
+                    <RouteErrorBoundary>
                       <Suspense fallback={<RouteFallback />}>{r.element}</Suspense>
                     </RouteErrorBoundary>
                   </RoleGuard>

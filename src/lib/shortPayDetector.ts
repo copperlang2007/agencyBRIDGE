@@ -49,6 +49,9 @@ export function toCents(amount: number): number {
   return Math.round(amount * 100);
 }
 
+/** Largest amount whose cent value still fits exactly in a JS number. */
+const MAX_SAFE_AMOUNT = Number.MAX_SAFE_INTEGER / 100;
+
 /**
  * Parse a currency string entered by a human.
  *
@@ -66,11 +69,20 @@ export function parseCurrency(raw: string): { value: number; valid: boolean } {
   const body = parenthesised ? parenthesised[1] : trimmed;
 
   // One optional sign, digits with at most one decimal point, commas as separators.
-  const m = /^([+-]?)\s*\$?\s*((?:\d{1,3}(?:,\d{3})*|\d*)(?:\.\d+)?)$/.exec(body.trim());
+  const m = /^([+-]?)\s*\$?\s*((?:\d{1,3}(?:,\d{3})*|\d*)(?:\.(\d+))?)$/.exec(body.trim());
   if (!m || m[2] === "" || m[2] === ".") return { value: 0, valid: false };
+
+  // More than two decimals is not a cent amount. Rounding it would silently erase
+  // a real difference — 450.004 and 450.001 both land on 45000 cents — so it is
+  // rejected unless the extra digits are padding zeros.
+  const decimals = m[3] ?? "";
+  if (decimals.length > 2 && /[^0]/.test(decimals.slice(2))) return { value: 0, valid: false };
 
   const magnitude = Number(m[2].replace(/,/g, ""));
   if (!Number.isFinite(magnitude)) return { value: 0, valid: false };
+  // Beyond this, amount * 100 loses integer precision and equal values can compare
+  // unequal — an amount that large is a typo in a commission field regardless.
+  if (magnitude > MAX_SAFE_AMOUNT) return { value: 0, valid: false };
 
   const negative = m[1] === "-" || Boolean(parenthesised);
   return { value: negative ? -magnitude : magnitude, valid: true };

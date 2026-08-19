@@ -63,8 +63,15 @@ export const AUDIT_STORAGE_KEY = "medicare_audit_log_v2";
 /** Predecessor hash of the first entry in an untruncated chain. */
 export const GENESIS_HASH = "0".repeat(64);
 
-/** Entries this browser has dropped to stay inside the retention cap. */
-const TRIM_COUNT_KEY = `${AUDIT_STORAGE_KEY}_trimmed`;
+/**
+ * The `prevHash` the current retained head is expected to carry.
+ *
+ * A counter of dropped entries is not enough: once retention has trimmed even
+ * once, any later head deletion looks like more of the same rollover. Recording
+ * the boundary itself pins which entry the window is supposed to start at, so
+ * removing the head no longer resembles housekeeping.
+ */
+const HEAD_BOUNDARY_KEY = `${AUDIT_STORAGE_KEY}_head`;
 
 const MAX_ENTRIES = 2000;
 const MAX_ENTRIES_UNDER_PRESSURE = 500;
@@ -158,42 +165,40 @@ export function getAuditLog(): AuditEntry[] {
   }
 }
 
-function readTrimCount(): number {
+function readHeadBoundary(): string {
   try {
-    const n = Number(localStorage.getItem(TRIM_COUNT_KEY));
-    return Number.isFinite(n) && n > 0 ? n : 0;
+    return localStorage.getItem(HEAD_BOUNDARY_KEY) ?? GENESIS_HASH;
   } catch {
-    return 0;
+    return GENESIS_HASH;
   }
 }
 
-function recordTrim(dropped: number): void {
-  if (dropped <= 0) return;
-  try {
-    localStorage.setItem(TRIM_COUNT_KEY, String(readTrimCount() + dropped));
-  } catch {
-    /* best effort */
-  }
-}
+/** Every field that goes into the hash must be a string, or the record is corrupt. */
+const HASHED_FIELDS = [
+  "id", "timestamp", "actor", "actorId", "action", "category",
+  "entity", "entityId", "severity", "details", "sessionId", "ipAddress", "userAgent",
+] as const;
 
-/** Shaped well enough to hash. Anything else is corruption, not a chain entry. */
 function isEntry(e: unknown): e is AuditEntry {
   if (!e || typeof e !== "object") return false;
-  const c = e as Partial<AuditEntry>;
-  return typeof c.hash === "string" && typeof c.prevHash === "string";
+  const c = e as Record<string, unknown>;
+  if (typeof c.hash !== "string" || typeof c.prevHash !== "string") return false;
+  return HASHED_FIELDS.every((f) => typeof c[f] === "string");
+}
+
+function write(kept: AuditEntry[]): void {
+  localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(kept));
+  // Written only after the log write succeeds, so the boundary can never claim a
+  // rollover that did not actually happen.
+  localStorage.setItem(HEAD_BOUNDARY_KEY, kept.length > 0 ? kept[0].prevHash : GENESIS_HASH);
 }
 
 function persist(log: AuditEntry[]): void {
   try {
-    recordTrim(log.length - MAX_ENTRIES);
-    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log.slice(-MAX_ENTRIES)));
+    write(log.slice(-MAX_ENTRIES));
   } catch {
     try {
-      recordTrim(log.length - MAX_ENTRIES_UNDER_PRESSURE);
-      localStorage.setItem(
-        AUDIT_STORAGE_KEY,
-        JSON.stringify(log.slice(-MAX_ENTRIES_UNDER_PRESSURE)),
-      );
+      write(log.slice(-MAX_ENTRIES_UNDER_PRESSURE));
     } catch {
       /* storage unavailable (private mode / quota) — in-memory listeners still fire */
     }
@@ -280,16 +285,16 @@ export function verifyAuditIntegrity(): AuditIntegrityResult {
     }
   }
 
-  // Computed only once the chain has verified, so `truncated` never appears
-  // alongside a failure. A head that no longer starts at genesis is a retention
-  // rollover *only* if retention actually dropped entries; otherwise something
-  // else removed the head, and that is tampering rather than housekeeping.
-  const headMissing = log.length > 0 && log[0].prevHash !== GENESIS_HASH;
-  if (headMissing && readTrimCount() === 0) {
+  // Checked only once the chain has verified, so `truncated` never appears
+  // alongside a failure. The head must sit exactly where retention last left it;
+  // anything else means entries were removed from the front by something other
+  // than the retention cap.
+  const expectedHeadPrev = readHeadBoundary();
+  if (log.length > 0 && log[0].prevHash !== expectedHeadPrev) {
     return { valid: false, brokenAt: 0, truncated: false };
   }
 
-  return { valid: true, brokenAt: null, truncated: headMissing };
+  return { valid: true, brokenAt: null, truncated: expectedHeadPrev !== GENESIS_HASH };
 }
 
 /** Export log as CSV (SOC 2 evidence artifact). */
@@ -329,7 +334,7 @@ export function clearAuditLog(
   const priorCount = getAuditLog().length;
   try {
     localStorage.removeItem(AUDIT_STORAGE_KEY);
-    localStorage.removeItem(TRIM_COUNT_KEY);
+    localStorage.removeItem(HEAD_BOUNDARY_KEY);
   } catch {
     /* fall through — the re-seed below is what matters */
   }

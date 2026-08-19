@@ -105,7 +105,7 @@ describe("audit chain — tamper detection", () => {
 const simulateRetentionTrim = (dropped: number) => {
   const kept = getAuditLog().slice(dropped);
   localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(kept));
-  localStorage.setItem(`${AUDIT_STORAGE_KEY}_trimmed`, String(dropped));
+  localStorage.setItem(`${AUDIT_STORAGE_KEY}_head`, kept[0].prevHash);
   return kept;
 };
 
@@ -130,6 +130,26 @@ describe("audit chain — truncation is not tampering", () => {
     for (let i = 0; i < 5; i++) logAudit(entry(i));
     localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(getAuditLog().slice(1)));
     expect(verifyAuditIntegrity()).toMatchObject({ valid: false, brokenAt: 0, truncated: false });
+  });
+
+  // Raised in review: a trim *counter* only closed the never-trimmed case. Once
+  // retention had rolled over even once, any later head deletion looked like more
+  // of the same rollover.
+  it("deleting the head AFTER a legitimate rollover is still tampering", () => {
+    for (let i = 0; i < 5; i++) logAudit(entry(i));
+    simulateRetentionTrim(1);
+    expect(verifyAuditIntegrity()).toMatchObject({ valid: true, truncated: true });
+
+    // attacker removes the current retained head
+    localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(getAuditLog().slice(1)));
+    expect(verifyAuditIntegrity()).toMatchObject({ valid: false, brokenAt: 0 });
+  });
+
+  it("real retention trimming keeps the chain verifying across repeated rollovers", () => {
+    for (let i = 0; i < 6; i++) logAudit(entry(i));
+    simulateRetentionTrim(1);
+    simulateRetentionTrim(2);
+    expect(verifyAuditIntegrity()).toMatchObject({ valid: true, truncated: true });
   });
 
   it("never reports truncated alongside a failure", () => {
@@ -160,6 +180,20 @@ describe("audit chain — malformed storage", () => {
     localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log));
     expect(verifyAuditIntegrity()).toMatchObject({ valid: false, brokenAt: 1 });
   });
+
+  // Raised in review: the guard checked only hash/prevHash, so a record missing a
+  // hashed field reached the digest and failed for the wrong reason.
+  it.each(["actor", "timestamp", "details", "userAgent", "severity"])(
+    "reports a record whose %s is not a string",
+    (field) => {
+      logAudit(entry(0));
+      logAudit(entry(1));
+      const log = getAuditLog() as unknown as Record<string, unknown>[];
+      delete log[1][field];
+      localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log));
+      expect(verifyAuditIntegrity()).toMatchObject({ valid: false, brokenAt: 1 });
+    },
+  );
 
   it("survives a non-array payload", () => {
     localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify({ not: "an array" }));
@@ -224,7 +258,7 @@ describe("audit chain — truncation cannot be forged", () => {
     for (let i = 0; i < 5; i++) logAudit(entry(i));
     const kept = getAuditLog().slice(2);
     localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(kept));
-    localStorage.setItem(`${AUDIT_STORAGE_KEY}_trimmed`, "2");
+    localStorage.setItem(`${AUDIT_STORAGE_KEY}_head`, kept[0].prevHash);
     expect(verifyAuditIntegrity()).toMatchObject({ valid: true, truncated: true });
   });
 });
