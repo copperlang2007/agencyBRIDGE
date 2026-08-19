@@ -35,7 +35,7 @@ function useBookQuery<T>(
 ): UseQueryResult<T[]> {
   const { user } = useRole();
   const id = user?.id ?? "anonymous";
-  return useQuery({
+  const result = useQuery({
     queryKey: bookKeys[part](id),
     queryFn: fetcher,
     // Nothing is fetched before there is a session; an unauthenticated request
@@ -52,6 +52,16 @@ function useBookQuery<T>(
       return count < 2;
     },
   });
+
+  // TanStack keeps the last successful data alongside `isError`, which is the
+  // right default for a flaky feed and the wrong one for rows behind an
+  // authorization check: a revoked session would keep rendering the book it is
+  // no longer entitled to. Blanked here, at the single place every consumer
+  // goes through, rather than relying on each page to remember to check.
+  if (result.isError) {
+    return { ...result, data: undefined } as UseQueryResult<T[]>;
+  }
+  return result;
 }
 
 export const useClientsQuery = () => useBookQuery<ClientRecord>("clients", api.clients);

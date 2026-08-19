@@ -205,7 +205,7 @@ Onboarding is now skipped for demo sessions.
 
 ```
 npm run typecheck   clean
-npm test            132 passed (9 files)
+npm test            143 passed (10 files)
 npm run build       3425 modules, entry chunk unchanged at 1.1 MB
 node scripts/assert-spa-rewrite.mjs   OK
 ```
@@ -213,9 +213,17 @@ node scripts/assert-spa-rewrite.mjs   OK
 `tsconfig.json` covered `src` only, so the entire API layer was invisible to
 `tsc` — CI would have stayed green while a broken handler shipped. `api` is now
 in `include`, verified by planting a deliberate type error and confirming it
-failed the check. The client bundle was checked for leakage in both directions:
-no server code and no password digests reach it, and the entry chunk is
-unchanged.
+failed the check. The bundle was checked in both directions, and the result needs stating
+precisely rather than as a slogan. **No password digests reach the client** —
+the credential table is gone. **No server code executes in the client**: nothing
+under `api/` is imported by the app's runtime. But the "export source" feature
+*does* ship `api/` and `db/` as raw text, in lazily-loaded chunks, so the
+downloadable zip is runnable — a deliberate choice recorded in the diff, and one
+that makes "no server code shipped to client" false as stated. What is exposed is
+implementation, not secrets: scrypt cost parameters, the session-digest scheme
+and the schema are all safe to publish, and any design that depended on their
+secrecy would be broken anyway. The claim is corrected here rather than the
+behaviour changed.
 
 The final journey was run against the **production build**, served with the
 rewrite semantics `vercel.json` declares and `/api` proxied to the function host
@@ -224,7 +232,11 @@ Remaining console noise is five `ERR_CONNECTION_RESET` from the hot-linked CDN
 images this sandbox cannot reach (R-006) and the 403/401 from the deliberate
 negative tests above.
 
-Tests added: `scope` (17), `permissions` (17), `auditChain` (19), `password` (12).
+Tests added over this pass and the review rounds that followed it: `scope` (17),
+`permissions` (18), `auditChain` (21), `password` (12), `auditTransport` (9).
+The counts here are the ones `npm test` reports at this commit; earlier drafts of
+this file quoted figures from mid-pass runs, which review correctly caught as
+inconsistent with the tree.
 Removed: `dataScope.test.ts` and `auditLog.test.ts` — both tested modules that no
 longer exist. Their subject matter did not disappear with them; the scoping rules
 are now tested where they are enforced, and the chain is tested in the module the

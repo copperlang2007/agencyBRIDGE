@@ -155,12 +155,22 @@ describe("verifyChain", () => {
     expect(result.reason).toMatch(/missing/i);
   });
 
-  it("detects a malformed entry without throwing", () => {
+  it("detects a malformed entry without throwing, and names its sequence", () => {
+    // brokenAt is shown to an operator as "Broken at #N" and has to point at
+    // the entry they can go and look at. Reporting the array index sends them
+    // to the wrong row for any window that does not begin at seq 1.
     const entries: unknown[] = chain(3);
     entries[1] = { ...(entries[1] as object), actor: undefined };
     const result = verifyChain(entries);
     expect(result.valid).toBe(false);
-    expect(result.brokenAt).toBe(1);
+    expect(result.brokenAt).toBe(2);
+    expect(result.reason).toMatch(/Entry 2 is malformed/);
+  });
+
+  it("falls back to position when a malformed entry has no usable sequence", () => {
+    const entries: unknown[] = chain(3);
+    entries[1] = { ...(entries[1] as object), actor: undefined, seq: "not-a-number" };
+    expect(verifyChain(entries).brokenAt).toBe(2); // one-based position
   });
 
   it("rejects a chain whose head does not link to the expected boundary", () => {

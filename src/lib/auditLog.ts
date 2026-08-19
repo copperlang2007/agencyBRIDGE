@@ -14,7 +14,7 @@
 // about who did it — the server takes actor, session and IP from the session.
 
 import { api, type AuditAppend, type AuditRecord } from "@/lib/api";
-import { csvCell, csvRows } from "@/lib/csv";
+import { csvRows } from "@/lib/csv";
 
 // Declared once in auditChain, which the API imports too, so a category the UI
 // knows cannot be one the server rejects.
@@ -190,6 +190,25 @@ export function logAudit(params: {
   schedule();
 }
 
+/**
+ * Drops anything still queued.
+ *
+ * Called at sign-out, after a final flush attempt. Entries name no actor — the
+ * server attributes them to whoever is signed in when they arrive — so an entry
+ * left over from one session and delivered during the next would be recorded
+ * against the wrong person. An audit trail that misattributes is worse than one
+ * with a gap, so the gap is the deliberate choice.
+ */
+export function discardAuditQueue(): void {
+  queue = [];
+  failures = 0;
+  if (timer !== null) {
+    clearTimeout(timer);
+    timer = null;
+  }
+  writeOutbox(queue);
+}
+
 /** Sends anything buffered right now. Used before navigating away. */
 export function flushAuditLog(): Promise<void> {
   if (timer !== null) {
@@ -198,6 +217,11 @@ export function flushAuditLog(): Promise<void> {
   }
   return flush();
 }
+
+// Anything recovered from a previous page load is sent without waiting for the
+// user to happen to do something else; an idle tab would otherwise hold it
+// indefinitely.
+if (queue.length > 0) schedule();
 
 /** How many entries are waiting to reach the server. */
 export function pendingAuditCount(): number {
@@ -218,9 +242,9 @@ export function fetchAuditIntegrity(): Promise<AuditIntegrityResult> {
  * CSV of the supplied entries.
  *
  * Takes entries rather than fetching them so the export always matches what the
- * operator is looking at. Every cell goes through `csvCell`, which neutralises
- * leading `= + - @` and control characters — a carrier name or a details string
- * is attacker-influenced text, and a spreadsheet will happily execute it.
+ * operator is looking at. `csvRows` escapes every cell, neutralising leading
+ * `= + - @` and control characters — a carrier name or a details string is
+ * attacker-influenced text, and a spreadsheet will happily execute it.
  */
 export function exportAuditCSV(entries: readonly AuditEntry[]): string {
   const header = [
@@ -231,5 +255,7 @@ export function exportAuditCSV(entries: readonly AuditEntry[]): string {
     e.seq, e.timestamp, e.actor, e.actorId, e.action, e.category,
     e.entity, e.entityId, e.severity, e.details, e.sessionId, e.ipAddress, e.userAgent, e.hash,
   ]);
-  return csvRows([header, ...rows].map((row) => row.map(csvCell)));
+  // csvRows escapes each cell itself; mapping csvCell first quoted everything
+  // twice, so a spreadsheet showed `"""Patricia Chen"""` rather than the name.
+  return csvRows([header, ...rows]);
 }

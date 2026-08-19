@@ -194,8 +194,10 @@ async function upsertUser({ tenantId, email, name, role, agentId, passwordHash, 
            -- A demo account is set to null outright; a real one keeps its
            -- password when the seed is re-run without one.
            password_hash = case when $7::boolean then null
-                                else coalesce(excluded.password_hash, users.password_hash) end,
-           status    = 'active'
+                                else coalesce(excluded.password_hash, users.password_hash) end
+           -- `status` is deliberately absent: a new row defaults to active, and
+           -- an existing one keeps whatever it has. Re-running the seed must not
+           -- silently reinstate an account somebody disabled.
      where users.tenant_id = excluded.tenant_id`,
     [tenantId, normalized, name, role, agentId, passwordHash, isDemo === true],
   );
@@ -239,6 +241,10 @@ if (adminEmail && adminPassword) {
     process.exit(1);
   }
   const slug = (process.env.SEED_TENANT_SLUG || "agencybridge").trim();
+  if (slug === "") {
+    console.error("SEED_TENANT_SLUG is empty; choose a slug or leave it unset.");
+    process.exit(1);
+  }
   if (slug === DEMO_SLUG) {
     console.error(`"${DEMO_SLUG}" is reserved for the read-only demo tenant; choose another SEED_TENANT_SLUG.`);
     process.exit(1);

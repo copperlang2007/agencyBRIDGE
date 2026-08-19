@@ -247,7 +247,22 @@ export async function verifyAudit(tenantId: string): Promise<ChainIntegrityResul
   if (!result.valid) return { ...result, count: entries.length };
 
   const last = entries[entries.length - 1];
-  if (marker && (Number(last.seq) !== Number(marker.seq) || last.hash !== marker.hash)) {
+
+  // No marker, but entries exist: the one check that detects deletion of the
+  // *newest* rows cannot run, so this cannot be reported as verified. Skipping
+  // it on a missing marker would leave exactly the hole the marker was added to
+  // close — and deleting the marker is easier than deleting the chain.
+  if (!marker) {
+    return {
+      valid: false,
+      brokenAt: Number(last.seq),
+      truncated: true,
+      reason: "No recorded head for this chain, so entries removed from the end could not be detected.",
+      count: entries.length,
+    };
+  }
+
+  if (Number(last.seq) !== Number(marker.seq) || last.hash !== marker.hash) {
     return {
       valid: false,
       brokenAt: Number(marker.seq),

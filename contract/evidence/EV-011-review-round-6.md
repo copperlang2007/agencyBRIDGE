@@ -257,3 +257,74 @@ its own chain; then it assumed an answer it had never received; then it kept an
 answer that had expired. The failure mode is not a bug that keeps recurring by
 accident — it is what a status display does by default, unless every path that
 can fail is made to say so.
+
+---
+
+# Fourth round — cubic, 36 findings
+
+Eight fixed as real defects, several of which falsified claims made earlier in
+this same evidence file. The rest are recorded rather than fixed, with reasons.
+
+## Fixed — defects
+
+| Finding | Why it mattered |
+|---|---|
+| **`verifyAudit` returned valid when the head marker was absent** | The marker is what detects deletion of the *newest* entries. Guarding the comparison on `if (marker …)` meant deleting the marker — one row, easier than deleting the chain — restored exactly the hole the marker was added to close. Now fails closed: entries with no marker cannot be reported as verified. |
+| **The raw query hooks kept serving rows after an authorization failure** | The previous round's fix covered the array helpers (`useClients`) but not `useClientsQuery`, which `ClientsCRM` uses directly. TanStack keeps the last successful data alongside `isError` — correct for a flaky feed, wrong for rows behind an authorization check, because a revoked session kept rendering the book. Blanked at the one place every consumer passes through. |
+| **The CSV export escaped every cell twice** | `csvRows` escapes each cell; the caller mapped `csvCell` over the rows first. A spreadsheet showed `"""Patricia Chen"""` instead of a name. The injection defence still worked — the output was simply wrong. |
+| **Queued audit entries could be delivered under the next user's identity** | Entries carry no actor: the server attributes them to whoever is signed in when they arrive. An entry queued before sign-out and flushed after the next sign-in would name the wrong person. Sign-out now flushes while the cookie is still valid, revokes, then discards the remainder — a gap in the trail rather than a misattribution, which is the better failure. |
+| **Recovered entries waited for the next user action** | A queue restored from storage was only flushed when something else happened to call `logAudit`. An idle tab held it indefinitely. Flushed on load. |
+| **Re-seeding re-enabled a disabled account** | `status = 'active'` was unconditional in the upsert. Somebody disables an administrator; the next `npm run db:seed` turns them back on. `status` is now absent from the update clause entirely. |
+| **A malformed entry reported its array index as `brokenAt`** | The Security page renders that as "Broken at #N" and sends the operator to a row. For any window not starting at seq 1, it sent them to the wrong one. Reports the row's own sequence, falling back to position only when that field is unusable — which is possible precisely because the record is malformed. The existing test asserted the old behaviour and was corrected. |
+| **`esbuild` was imported by the seed but never declared** | It resolved transitively through Vite. A production-only install would not have it. |
+
+Also fixed: `contract/RISKS.md` had a blank line between R-010 and R-011 that
+split the markdown table, so nine risk rows rendered as literal pipes.
+
+## Corrected claims
+
+Two numbers and one statement in EV-010 were wrong, and review was right to
+check them against the tree rather than take them:
+
+- Test counts quoted figures from mid-pass runs. They now match what `npm test`
+  reports at this commit: **143 across 10 files**.
+- "No server code shipped to client" was false as stated. The export feature
+  deliberately ships `api/` and `db/` as raw text so the downloadable zip is
+  runnable. What that exposes is implementation, not secrets — scrypt cost
+  parameters, the session-digest scheme and the schema are all safe to publish,
+  and a design depending on their secrecy would be broken regardless. The claim
+  is corrected rather than the behaviour changed.
+
+## Recorded, not fixed
+
+Each of these is real. None is a defect that a reader of this branch would hit,
+and each needs a design decision rather than a patch:
+
+- **The database does not enforce append-only.** The API's role can `UPDATE` and
+  `DELETE` `audit_events`. The chain makes tampering *detectable*, which is what
+  it claims; making it *impossible* needs a restricted writer role or a
+  security-definer function. **R-020.**
+- **Multi-tab duplicate sends.** Two tabs share one outbox and flush
+  independently. **R-021.**
+- **Append and head-marker are two statements**, so a failure between them can
+  leave a stale marker and a false tamper report. Needs one transaction, which
+  the HTTP driver does not offer. **R-022.**
+- **Verification reads entries and marker separately**, so a concurrent append
+  can make a healthy chain look truncated for one request. **R-023.**
+- **Sessions and login attempts are never purged.** **R-024.**
+- **`__Host-` cookie prefix** would stop a sibling subdomain planting a duplicate
+  session cookie. **R-025.**
+- **A missing `Origin` header skips the same-origin check.** Deliberate — a
+  non-browser client has no ambient cookie — but it is an assumption worth
+  naming. **R-026.**
+- **NFKC vs NFC.** NFKC folds compatibility characters, so a few visually
+  distinct passwords become aliases. The entropy cost is small and the
+  cross-keyboard benefit is the reason it is there; changing it now would
+  invalidate existing hashes. **R-027.**
+- **`requireRoute` is unused.** Route permissions gate pages, not endpoints, and
+  the endpoints are scope-gated instead. Kept deliberately or removed — it is one
+  or the other, and it is currently neither. **R-028.**
+- **Notes over 2,000 characters are truncated rather than rejected.** **R-029.**
+- **The route-list test parses `App.tsx` with a regex.** Fragile, as noted; the
+  right fix is exporting the route table from a module both sides import.
+  **R-030.**

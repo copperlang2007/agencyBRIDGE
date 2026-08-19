@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { api, ApiError } from "@/lib/api";
-import { logAudit } from "@/lib/auditLog";
+import { discardAuditQueue, flushAuditLog, logAudit } from "@/lib/auditLog";
 import {
   actionPermissions,
   getImpersonatableRoles,
@@ -138,7 +138,17 @@ export function RoleProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setOriginalUser(null);
     setIsDemo(false);
-    void api.logout().catch(() => undefined);
+
+    void (async () => {
+      // Deliver what this session recorded while its cookie is still valid,
+      // revoke, then drop anything that did not make it. Entries carry no
+      // actor — the server attributes them to whoever is signed in when they
+      // arrive — so leftovers delivered after the next sign-in would be
+      // recorded against the wrong person.
+      await flushAuditLog().catch(() => undefined);
+      await api.logout().catch(() => undefined);
+      discardAuditQueue();
+    })();
   }, []);
 
   /**

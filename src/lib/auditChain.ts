@@ -130,7 +130,13 @@ export function verifyChain(
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
     if (!isChainRecord(entry)) {
-      return { valid: false, brokenAt: i, truncated, reason: `Entry ${i} is malformed.` };
+      // Prefer the row's own sequence number: the array index points the
+      // Security page at the wrong entry whenever the window does not start
+      // at seq 1. Fall back to a one-based position only when seq is unusable,
+      // which is possible precisely because the record is malformed.
+      const claimed = Number((entry as { seq?: unknown })?.seq);
+      const at = Number.isFinite(claimed) && claimed > 0 ? claimed : i + 1;
+      return { valid: false, brokenAt: at, truncated, reason: `Entry ${at} is malformed.` };
     }
     const expectedPrev = i === 0 ? expectedHeadPrev : (entries[i - 1] as ChainedRecord).hash;
     if (entry.prevHash !== expectedPrev) {
