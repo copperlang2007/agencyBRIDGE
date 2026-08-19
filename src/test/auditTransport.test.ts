@@ -289,6 +289,35 @@ describe("takeAuditQueue", () => {
     expect(sent.map((e) => e.entityId)).toEqual(["on-the-wire"]);
   });
 
+  it("does not carry a discarded session's batch length into the next session", async () => {
+    // `inFlightCount` indexes positions in the queue it was measured against.
+    // Left standing across a discard it described a batch from a session that
+    // was gone, so the NEXT sign-out skipped that many entries of the new
+    // session's queue — and skipped entries at sign-out are dropped, not
+    // deferred. Two sign-outs while one append is still open is all it takes.
+    const { logAudit, flushAuditLog, takeAuditQueue } = await freshModule();
+
+    let release: (v: { written: number }) => void = () => {};
+    appendAudit.mockImplementationOnce(
+      () => new Promise((resolve) => { release = resolve; }),
+    );
+
+    // Session A: two entries, both on the wire, then sign out.
+    logAudit({ action: "A", category: "client", entity: "e", entityId: "a1" });
+    logAudit({ action: "A", category: "client", entity: "e", entityId: "a2" });
+    const inFlight = flushAuditLog();
+    expect(takeAuditQueue()).toEqual([]); // both are already being delivered
+
+    // Session B logs and signs out while A's request is still open.
+    logAudit({ action: "B", category: "client", entity: "e", entityId: "b1" });
+    logAudit({ action: "B", category: "client", entity: "e", entityId: "b2" });
+
+    expect(takeAuditQueue().map((e) => e.entityId)).toEqual(["b1", "b2"]);
+
+    release({ written: 2 });
+    await inFlight;
+  });
+
   it("invalidates a request already in flight, like any other discard", async () => {
     const { logAudit, flushAuditLog, takeAuditQueue, pendingAuditCount } = await freshModule();
 

@@ -285,6 +285,12 @@ export function discardAuditQueue(): void {
   // into the queue that replaces this one.
   generation += 1;
   queue = [];
+  // The count indexes positions in the queue being discarded, and the queue
+  // that replaces it starts at zero. Left standing it described a batch from a
+  // session that is gone, so the *next* sign-out skipped that many entries of
+  // the new session's queue and dropped them. `takeAuditQueue` reads the count
+  // before calling this, so the call that needs it still gets it.
+  inFlightCount = 0;
   failures = 0;
   if (timer !== null) {
     clearTimeout(timer);

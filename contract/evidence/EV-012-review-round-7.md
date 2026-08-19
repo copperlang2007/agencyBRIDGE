@@ -254,3 +254,69 @@ npm test            159 passed (11 files)     +12; new auditIntake suite
 npm run build       clean
 node scripts/assert-spa-rewrite.mjs   OK
 ```
+
+---
+
+# Round 10 — two more, one of them mine again
+
+cubic's review of `569a8ff` found two, both P1, and both true.
+
+## A stale index outlived the queue it indexed
+
+`inFlightCount` records how many entries at the head of the queue are already on
+the wire. It indexes *positions in the queue it was measured against*, and
+`discardAuditQueue` replaced that queue without resetting it. The count then
+described a batch belonging to a session that no longer existed, so the next
+sign-out sliced from that offset into the new session's queue and skipped that
+many entries — and entries skipped at sign-out are dropped, not deferred.
+
+Two sign-outs while one append is still open is the whole reproduction. Fixed by
+resetting the count inside `discardAuditQueue`; `takeAuditQueue` reads it before
+calling that, so the call that legitimately needs it still gets it.
+
+| Defect reinstated | Result |
+|---|---|
+| count survives the discard | fails — `expected [] to deeply equal [ 'b1', 'b2' ]` |
+
+That is session B's entries vanishing, which is precisely what was claimed.
+
+## A database failure signed the user out without signing them out
+
+This one is a regression I introduced in round 9. The original handler cleared
+the cookie **before any database call**, with a comment saying why. Round 9
+moved the clear to the end and made it conditional, to stop it wiping a
+concurrent sign-in — and in doing so put it behind `await currentSession(req)`,
+which hits the database and can throw. On that path the handler returned 503
+having never reached the decision, so the cookie survived. The client swallows
+the error and clears its own state, so the caller saw the login screen while
+their session stayed usable: the exact failure the revoke exists to prevent,
+reached by a path that skipped it.
+
+The clear now runs in a `finally` keyed on a single `revoked` flag, so no exit
+from the handler can forget to decide, and the error still propagates. The
+round-9 property is kept — a token known to be dead is left alone, so a
+concurrent sign-in survives — and every other outcome clears.
+
+## The pattern is worth naming
+
+Rounds 8, 9 and 10 have each found real defects in the sign-out and audit
+transport path, and **four of them were introduced by the previous round's
+fix** — the cookie header in round 9, the stale index and this one in round 10.
+Each individual fix is correct. The rate at which fixing one thing here breaks
+another is the actual signal: this path holds more concurrent state than its job
+justifies — a queue, an outbox, a generation counter, an in-flight index, and a
+handover at sign-out, all to move records the server could have written itself.
+
+The structural answer is already written down as **R-014**: emit audit events
+from the server-side operation handlers instead of accepting them from the
+client. That deletes the queue, the outbox, the generation counter, the in-flight
+index and the sign-out handover together, and it closes R-014, R-021, R-031 and
+most of R-015 as a side effect. It is a design change, not a review-round fix,
+and it is the owner's call — recorded here rather than started.
+
+```
+npm run typecheck   clean
+npm test            160 passed (11 files)
+npm run build       clean
+node scripts/assert-spa-rewrite.mjs   OK
+```
